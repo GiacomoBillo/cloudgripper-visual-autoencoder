@@ -16,14 +16,12 @@ class GreedyGrasper(AutograsperBase):
     def __init__(self, config, max_num_samples, resolution_grid = 0.1, real_time_feed=True):
         super().__init__(config)
 
-        # self.start_position
-        # self.end_position
-
         self.num_samples = 0
         self.max_num_samples = max_num_samples
         self.resolution_grid = resolution_grid
 
-        self.grid = Grid(shape=(10,10,10))
+        # self.grid = Grid(shape=(10,10,10))  # 3D
+        self.grid = Grid(shape=(10,10,10,10,10))  # 5D
 
         self.real_time_feed = real_time_feed
 
@@ -44,8 +42,9 @@ class GreedyGrasper(AutograsperBase):
         # current_angle = self.robot_state["claw_norm"]
         
         while self.num_samples < self.max_num_samples:
-            for dim in ["x", "y", "z"]:
-                
+            #for dim in ["x", "y", "z"]:
+            for dim in ["x", "y", "z", "r", "g"]:
+
                 # get new coordinate along dimension dim
                 cell = self.grid.greedy_update(dim=dim)
                 new_coordinate = np.random.uniform(cell*self.resolution_grid, (cell+1)*self.resolution_grid)
@@ -54,19 +53,18 @@ class GreedyGrasper(AutograsperBase):
 
                 # apply move and wait
                 if dim == "x":
-                    #self.robot.move_xy(new_coordinate, self.robot_pos["y_norm"])
                     self.robot.move_xy(new_coordinate, current_y)
-                    #self.robot.move_xy(np.random.rand(), np.random.rand())
-                    #self.robot.move_xy(0.5, 0.5)
                     current_x = new_coordinate
                 elif dim == "y":
-                    # print("update y", self.robot_pos["x_norm"], self.robot_pos["y_norm"], new_coordinate)
-                    #self.robot.move_xy(self.robot_pos["x_norm"], new_coordinate)
                     self.robot.move_xy(current_x, new_coordinate)
                     current_y = new_coordinate
                 elif dim == "z":
                     self.robot.move_z(new_coordinate)
-                    # current_z = new_coordinate
+                elif dim == "r":
+                    # scale the coordinate [0,1) -> [0,180)
+                    self.robot.rotate(int(new_coordinate * 180))
+                elif dim == "g":
+                    self.robot.move_gripper(new_coordinate)
                 time.sleep(self.time_between_orders)
                 
                 # get states
@@ -125,21 +123,33 @@ class GreedyGrasper(AutograsperBase):
 class Grid():
     def __init__(self, shape):
         self.grid = np.zeros(shape)
-        self.pos = {"x":0, "y":0, "z":0}
+        #self.pos = {"x":0, "y":0, "z":0}
+        self.pos = {"x":0, "y":0, "z":0, "r":0, "g":0}
 
 
     def greedy_update(self, dim):
         """
         Greedy choice of the cell along dim less explored
         """
+        # if dim == "x":
+        #     cells_along_dim = self.grid[:, self.pos["y"], self.pos["z"]]
+        # elif dim == "y":
+        #     cells_along_dim = self.grid[self.pos["x"], :, self.pos["z"]]
+        # elif dim == "z":
+        #     cells_along_dim = self.grid[self.pos["x"], self.pos["y"], :]
         if dim == "x":
-            cells_along_dim = self.grid[:, self.pos["y"], self.pos["z"]]
+            cells_along_dim = self.grid[:, self.pos["y"], self.pos["z"], self.pos["r"], self.pos["g"]]
         elif dim == "y":
-            cells_along_dim = self.grid[self.pos["x"], :, self.pos["z"]]
+            cells_along_dim = self.grid[self.pos["x"], :, self.pos["z"], self.pos["r"], self.pos["g"]]
         elif dim == "z":
-            cells_along_dim = self.grid[self.pos["x"], self.pos["y"], :]
+            cells_along_dim = self.grid[self.pos["x"], self.pos["y"], :, self.pos["r"], self.pos["g"]]
+        elif dim == "r":
+            cells_along_dim = self.grid[self.pos["x"], self.pos["y"], self.pos["z"], :, self.pos["g"]]
+        elif dim == "g":
+            cells_along_dim = self.grid[self.pos["x"], self.pos["y"], self.pos["z"], self.pos["r"], :]
         else:
             raise ValueError(f"Invalid dimension: {dim}")
+
 
         min_val = np.min(cells_along_dim)
         min_indeces = np.where(cells_along_dim == min_val)[0]
@@ -147,7 +157,7 @@ class Grid():
         new_coordinate = np.random.choice(min_indeces)
         
         self.pos[dim] = new_coordinate
-        self.grid[self.pos["x"], self.pos["y"], self.pos["z"]] += 1
+        self.grid[self.pos["x"], self.pos["y"], self.pos["z"], self.pos["r"], self.pos["g"]] += 1
 
         return new_coordinate
     
