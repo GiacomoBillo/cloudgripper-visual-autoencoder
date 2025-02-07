@@ -7,13 +7,25 @@ import os
 import cv2
 import json
 import ast
+from pynput import keyboard
 
+quit = False
 
 autograsper_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if autograsper_path not in sys.path:
     sys.path.append(autograsper_path)
 
+def on_release(key):
+    global quit
+    if key == keyboard.Key.esc or keyboard.KeyCode.from_char("q"):
+        print("Early termination of the program")
+        quit = True
+        return False # stop listener
+    
 
+"""
+Automatic grapser that explores the 
+"""
 class GreedyGrasper(AutograsperBase):
     def __init__(self, config, max_num_samples, resolution_grid=0.1):
         super().__init__(config)
@@ -41,21 +53,10 @@ class GreedyGrasper(AutograsperBase):
 
 
     def perform_task(self):
-
-        # while self.num_samples < self.max_num_samples:
-        #     cell_x = self.grid.greedy_update(dim="x")
-        #     new_x = np.random.rand() * self.resolution_grid + cell_x
-        #     self.robot.move_xy(new_x, self.robot_pos["y_norm"])
-        #     self.robot.get_all_states()
-        #     time.sleep(self.time_between_orders)
-
         current_x = self.robot_state["x_norm"]
         current_y = self.robot_state["y_norm"]
-        # current_z = self.robot_state["z_norm"]
-        # current_rotation = self.robot_state["rotation"]
-        # current_angle = self.robot_state["claw_norm"]
         
-        while self.num_samples < self.max_num_samples:
+        while self.num_samples < self.max_num_samples and not quit:
             #for dim in ["x", "y", "z"]:
             for dim in ["x", "y", "z", "r", "g"]:
 
@@ -82,13 +83,13 @@ class GreedyGrasper(AutograsperBase):
                 time.sleep(self.time_between_orders)
                 
                 # get states
-                #image_top, image_base, self.robot_pos, time_state = self.robot.get_all_states()
+                # image_top, image_base, self.robot_pos, time_state = self.robot.get_all_states()
                 self.record_current_state()
                 self.robot_pos, _ = self.robot.get_state()
                 self.num_samples += 1
                 # time.sleep(self.time_between_orders)
 
-                if self.num_samples >= self.max_num_samples:
+                if self.num_samples >= self.max_num_samples or quit:
                     break
 
                 # save images
@@ -102,13 +103,19 @@ class GreedyGrasper(AutograsperBase):
         with open(self.restore_grasper_file, 'w') as file:
             json.dump(self.grid.encode_grid(), file)
         # comment or remove if you want multiple experiments to run
-        print("Greedy collection finished")
+        print(f"Greedy collection session finished: {self.num_samples}/{self.max_num_samples} samples")
         self.state = RobotActivity.FINISHED  # stop data recording
 
 
     def startup(self):
         # This method will execute at the beginning of every experiment.
         # During this phase, data will not be recorded.
+
+        # listen for quit command
+        global quit
+        quit = False
+        listener = keyboard.Listener(on_release=on_release)
+        listener.start()
 
         print("performing startup tasks...")
 
@@ -163,12 +170,16 @@ class Grid():
         """
         Greedy choice of the cell along dim less explored
         """
+
+        # 3D
         # if dim == "x":
         #     cells_along_dim = self.grid[:, self.pos["y"], self.pos["z"]]
         # elif dim == "y":
         #     cells_along_dim = self.grid[self.pos["x"], :, self.pos["z"]]
         # elif dim == "z":
         #     cells_along_dim = self.grid[self.pos["x"], self.pos["y"], :]
+
+        # 5D
         if dim == "x":
             cells_along_dim = self.grid[:, self.pos["y"], self.pos["z"], self.pos["r"], self.pos["g"]]
         elif dim == "y":
