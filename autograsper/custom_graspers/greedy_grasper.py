@@ -8,8 +8,10 @@ import cv2
 import json
 import ast
 from pynput import keyboard
+import copy
 
 quit = False
+listener = None
 
 autograsper_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if autograsper_path not in sys.path:
@@ -36,23 +38,13 @@ class GreedyGrasper(AutograsperBase):
 
         experiment_name = parse_config(config)["experiment"].get("name").strip('"')
         self.restore_grasper_file = os.path.join(autograsper_path, "recorded_data", experiment_name, "restore_grasper.json")
-        # if the same experiment was already started
-        if os.path.exists(self.restore_grasper_file):
-            # restore grid
-            with open(self.restore_grasper_file, "r") as file:
-                encoded = ast.literal_eval(file.read())
-                self.grid = Grid.decode_grid(encoded)
-                # self.grid = json.load(Grid.decode_grid(encoded))
-                # self.grid = json.load(file, object_hook=lambda dct: Grid.decode_grid(dct))
-            print("Grasper restored")
-        else:
-            # initialize grid
-            # self.grid = Grid(shape=(10,10,10))  # 3D
-            self.grid = Grid(shape=(10,10,10,10,10))  # 5D
-
+        
+        self.grid = None
 
 
     def perform_task(self):
+        global quit
+
         current_x = self.robot_state["x_norm"]
         current_y = self.robot_state["y_norm"]
         
@@ -77,7 +69,7 @@ class GreedyGrasper(AutograsperBase):
                     self.robot.move_z(new_coordinate)
                 elif dim == "r":
                     # scale the coordinate [0,1) -> [0,180)
-                    self.robot.rotate(int(new_coordinate * 180))
+                    self.robot.rotate(round(new_coordinate * 180))
                 elif dim == "g":
                     self.robot.move_gripper(new_coordinate)
                 time.sleep(self.time_between_orders)
@@ -100,10 +92,15 @@ class GreedyGrasper(AutograsperBase):
                 #     concatenated_image = np.concatenate(resized_images, axis=1)
                 #     cv2.imshow("Robot images", concatenated_image)
 
+        if not quit:
+            listener.stop()
+
         with open(self.restore_grasper_file, 'w') as file:
             json.dump(self.grid.encode_grid(), file)
+
         # comment or remove if you want multiple experiments to run
-        print(f"Greedy collection session finished: {self.num_samples}/{self.max_num_samples} samples")
+        print(f"Greedy collection session finished: {self.num_samples}/{self.max_num_samples} samples"
+              f"\nTotal number of samples on the distribution grid: {self.grid.get_tot_samples()}")
         self.state = RobotActivity.FINISHED  # stop data recording
 
 
@@ -113,47 +110,63 @@ class GreedyGrasper(AutograsperBase):
 
         # listen for quit command
         global quit
+        global listener
         quit = False
         listener = keyboard.Listener(on_release=on_release)
         listener.start()
 
         print("performing startup tasks...")
 
-        # position 0
-        self.queue_orders(
-            [
-                (OrderType.MOVE_XY, [0, 0]),
-                (OrderType.MOVE_Z, [0]),
-                (OrderType.ROTATE, [0]),
-                (OrderType.GRIPPER_OPEN, []),
-            ],
-            time_between_orders=self.time_between_orders  # set in config.ini file
-        )
-        
-        # random position
-        # pos = {}
-        # # greedy choice of position (random if the grid is new)
-        # for dim in ["x", "y", "z", "r", "g"]:
-        #     cell = self.grid.greedy_update(dim=dim)
-        #     pos[dim] = self.resolution_grid * (np.random.rand() + cell)
+        # if the same experiment was already started
+        if os.path.exists(self.restore_grasper_file):
+            # restore grid
+            with open(self.restore_grasper_file, "r") as file:
+                encoded = ast.literal_eval(file.read())
+                self.grid = Grid.decode_grid(encoded)
+                # self.grid = json.load(Grid.decode_grid(encoded))
+                # self.grid = json.load(file, object_hook=lambda dct: Grid.decode_grid(dct))
+            print("Samples distribution grid restored, total number of samples:", self.grid.get_tot_samples())
+        else:
+            # initialize grid
+            # self.grid = Grid(shape=(10,10,10))  # 3D
+            self.grid = Grid(shape=(10,10,10,10,10))  # 5D
+
+        # # position 0
         # self.queue_orders(
         #     [
-        #         (OrderType.MOVE_XY, [pos["x"], pos["y"]]),
-        #         (OrderType.MOVE_Z, [pos["z"]]),
-        #         (OrderType.ROTATE, [pos["r"]]),
-        #         #(OrderType.GRIPPER_OPEN, []),
+        #         (OrderType.MOVE_XY, [0, 0]),
+        #         (OrderType.MOVE_Z, [0]),
+        #         (OrderType.ROTATE, [0]),
+        #         (OrderType.GRIPPER_OPEN, []),
         #     ],
         #     time_between_orders=self.time_between_orders  # set in config.ini file
         # )
-        # self.robot.move_gripper(pos["g"])
-        # time.sleep(self.time_between_orders)
+    
+        # initialize position in the less sampled cell of the grid 
+        start_pos = self.grid.less_sampled_cell()
+        print(f"Initial position on grid: {start_pos}")
+
+        # randomize coordinate in cell
+        for key in start_pos:
+            start_pos[key] = self.resolution_grid * (np.random.rand() + start_pos[key])
+        
+        self.queue_orders(
+            [
+                (OrderType.MOVE_XY, [start_pos["x"], start_pos["y"]]),
+                (OrderType.MOVE_Z, [start_pos["z"]]),
+                (OrderType.ROTATE, [round(start_pos["r"]*180)]),
+            ],
+            time_between_orders=self.time_between_orders  # set in config.ini file
+        )
+        self.robot.move_gripper(start_pos["g"])
+        time.sleep(self.time_between_orders)
 
         self.robot_state, _ = self.robot.get_state()
         #self.grid.set_position(self.robot_state)  # use only when x and y are normalized
         print(f"Initial state: {self.robot_state}")
 
     
-    # def reset_task(self):
+    # def reset_task(self): # does not work
     #     with open(self.restore_grasper_file, 'w') as file:
     #         json.dump(self.grid, file)
 
@@ -165,6 +178,16 @@ class Grid():
         #self.pos = {"x":0, "y":0, "z":0}
         self.pos = {"x":0, "y":0, "z":0, "r":0, "g":0}
 
+    def less_sampled_cell(self):
+        less_sampled = np.unravel_index(np.argmin(self.grid), self.grid.shape)
+        
+        self.pos["x"] = less_sampled[0]
+        self.pos["y"] = less_sampled[1]
+        self.pos["z"] = less_sampled[2]
+        self.pos["r"] = less_sampled[3]
+        self.pos["g"] = less_sampled[4]
+
+        return copy.deepcopy(self.pos)
 
     def greedy_update(self, dim):
         """
@@ -197,6 +220,9 @@ class Grid():
         min_val = np.min(cells_along_dim)
         min_indeces = np.where(cells_along_dim == min_val)[0]
 
+        # if more than one cell is available, avoid the current cell
+        if len(min_indeces) > 1 and self.pos[dim] in min_indeces:
+            min_indeces = np.delete(min_indeces, self.pos[dim])
         new_coordinate = np.random.choice(min_indeces)
         
         self.pos[dim] = new_coordinate
