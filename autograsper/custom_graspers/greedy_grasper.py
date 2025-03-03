@@ -1,29 +1,50 @@
-from grasper import AutograsperBase, RobotActivity
-from library.utils import OrderType, parse_config
-import time
-import numpy as np
 import sys
 import os
-import cv2
-import json
-import ast
-from pynput import keyboard
-import copy
-
-quit = False
-listener = None
 
 autograsper_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if autograsper_path not in sys.path:
     sys.path.append(autograsper_path)
 
+from grasper import AutograsperBase, RobotActivity
+from library.utils import OrderType, parse_config
+import time
+import numpy as np
+import cv2
+import json
+import ast
+from pynput import keyboard
+import copy
+import pygetwindow as gw
+import argparse
+
+
+quit = False
+listener = None
+
 def on_release(key):
     global quit
-    if key == keyboard.Key.esc or keyboard.KeyCode.from_char("q"):
-        print("Early termination of the program")
-        quit = True
-        return False # stop listener
+
+    active_window = gw.getActiveWindow()
     
+    if active_window and "Visual Studio Code" in active_window.title:
+        if key == keyboard.Key.esc:# and key == keyboard.KeyCode.from_char("q"):
+            print("Early termination of the program")
+            quit = True
+            return False # stop listener
+    
+
+def coordinate_to_idx(coordinate, dim):
+    # normalize coordinate
+    if coordinate<0:
+        coordinate = 0
+    elif coordinate>1:
+        coordinate = 1
+
+    idx = int(coordinate * dim)
+    if idx >= dim: # case coordinate = 1
+        idx = dim-1
+    return idx
+
 
 """
 Automatic grapser that explores the 
@@ -56,7 +77,7 @@ class GreedyGrasper(AutograsperBase):
                 cell = self.grid.greedy_update(dim=dim)
                 # new_coordinate = np.random.uniform(cell*self.resolution_grid, (cell+1)*self.resolution_grid)
                 new_coordinate = self.resolution_grid * (np.random.rand() + cell)
-                print(f"Cell: {cell}; New coordinate {dim}: {new_coordinate}")
+                print(f"Dim: {dim}; Cell: {cell}; New coordinate {dim}: {new_coordinate}")
 
                 # apply move and wait
                 if dim == "x":
@@ -84,6 +105,9 @@ class GreedyGrasper(AutograsperBase):
                 if self.num_samples >= self.max_num_samples or quit:
                     break
 
+                if self.num_samples%100 == 0:
+                    print(f"Number of samples taken {self.num_samples}/{self.max_num_samples}")
+
                 # save images
 
                 # display images in real time
@@ -94,13 +118,11 @@ class GreedyGrasper(AutograsperBase):
 
         if not quit:
             listener.stop()
-
-        with open(self.restore_grasper_file, 'w') as file:
-            json.dump(self.grid.encode_grid(), file)
-
-        # comment or remove if you want multiple experiments to run
+        self.grid.write_on_file(self.restore_grasper_file)
         print(f"Greedy collection session finished: {self.num_samples}/{self.max_num_samples} samples"
               f"\nTotal number of samples on the distribution grid: {self.grid.get_tot_samples()}")
+        
+        # comment or remove if you want multiple experiments to run
         self.state = RobotActivity.FINISHED  # stop data recording
 
 
@@ -220,9 +242,9 @@ class Grid():
         min_val = np.min(cells_along_dim)
         min_indeces = np.where(cells_along_dim == min_val)[0]
 
-        # if more than one cell is available, avoid the current cell
-        if len(min_indeces) > 1 and self.pos[dim] in min_indeces:
-            min_indeces = np.delete(min_indeces, self.pos[dim])
+        # # if more than one cell is available, avoid the current cell
+        # if len(min_indeces) > 1 and self.pos[dim] in min_indeces:
+        #     min_indeces = np.delete(min_indeces, self.pos[dim])
         new_coordinate = np.random.choice(min_indeces)
         
         self.pos[dim] = new_coordinate
@@ -239,6 +261,21 @@ class Grid():
         self.pos["z"] = robot_state["z_norm"] * self.shape[2]
         self.pos["r"] = robot_state["rotation"] * self.shape[3] / 180
         self.pos["g"] = robot_state["claw_norm"] * self.shape[4]
+
+    def store_sample(self, robot_state):
+        """
+        to store a sample in the distribution grid
+        useful to store samples already taken but not stored on the grid
+        """
+        x = coordinate_to_idx(robot_state["x_norm"], self.shape[0])
+        y = coordinate_to_idx(robot_state["y_norm"], self.shape[1])
+        z = coordinate_to_idx(robot_state["z_norm"], self.shape[2])
+        r = coordinate_to_idx(robot_state["rotation"]/180, self.shape[3])
+        g = coordinate_to_idx(robot_state["claw_norm"], self.shape[4])
+        print(x,y,z,r,g)
+        print("Prev val =", self.grid[x,y,z,r,g])
+        self.grid[x,y,z,r,g] += 1
+        print("Post val =", self.grid[x,y,z,r,g])
     
     def encode_grid(self):
         return {
@@ -252,7 +289,6 @@ class Grid():
     
     @classmethod
     def decode_grid(cls, encoded_obj):
-        print(encoded_obj)
 
         if not all(key in encoded_obj for key in ["shape", "grid", "pos"]):
             raise ValueError("Missing required fields in the JSON file")
@@ -264,4 +300,71 @@ class Grid():
         # obj.grid =  np.array(encoded_obj["grid"].split(",")).reshape(obj.shape)
         # obj.pos = ast.literal_eval(encoded_obj["pos"])  
         return obj
+    
+    def read_from_file():
+        pass
 
+    def write_on_file(self, filename):
+        with open(filename, 'w') as file:
+            json.dump(self.encode_grid(), file)
+
+    def print_sample_positions(self):
+        sampled_positions = np.argwhere(self.grid > 0)
+        print("Sampled positions:")
+        for pos in sampled_positions:
+            pos = tuple(map(int, pos))
+            count = int(self.grid[tuple(pos)])
+            print(f"Position {tuple(pos)} -> Count: {count}")
+
+
+def store_samples_on_grid(grid: Grid, session_num):
+    """
+    to store the samples of a recording session on the grid
+    if an error stopped the program before saving the grid
+    """
+    print("Store samples session", args.store_session, "on the grid")
+    state_file = os.path.join(autograsper_path, "recorded_data", experiment_name, session_num, "task", "states.json")
+
+    # open state file
+    if os.path.exists(state_file):
+        with open(state_file, "r") as file:
+            data = json.load(file)
+    else :
+        raise Exception(f"File {state_file} not found")
+    
+    num_samples = len(data)
+    for i, state in enumerate(data):
+        # store sample on grid
+        grid.store_sample(state)
+        # print(f"Sample {i+1}/{num_samples} stored on grid")
+    print("New samples stored:", num_samples)
+
+
+
+if __name__ == "__main__":
+
+    config_file = "autograsper/config.ini"
+    experiment_name = parse_config(config_file)["experiment"].get("name").strip('"')
+    restore_grasper_file = os.path.join(autograsper_path, "recorded_data", experiment_name, "restore_grasper.json")
+    
+    # store state session on experiment grid
+    if os.path.exists(restore_grasper_file):
+        # restore grid
+        with open(restore_grasper_file, "r") as file:
+            encoded = ast.literal_eval(file.read())
+            grid = Grid.decode_grid(encoded)
+    print("Tot samples on grid:", grid.get_tot_samples())
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--store_session")
+    parser.add_argument("--print_samples_pos", action="store_true")
+    args = parser.parse_args()
+    if args.print_samples_pos:
+        grid.print_sample_positions()
+    if args.store_session:
+        store_samples_on_grid(grid, args.store_session)
+        
+        # save grid
+        grid.write_on_file(restore_grasper_file)
+        print("Final samples on grid:", grid.get_tot_samples())
