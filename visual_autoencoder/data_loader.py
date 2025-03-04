@@ -12,8 +12,15 @@ project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 class GripperDataset(Dataset):
-    def __init__(self, experiment, sessions=None):
-        data_path = os.path.abspath(os.path.join(project_path, "autograsper", "recorded_data", experiment))
+    def __init__(self, abs_path=None, experiment=None, sessions=None):
+        # get dataset from absolute path or default path and experiment name
+        if abs_path is not None:
+            data_path = abs_path
+        elif experiment is not None:
+            data_path = os.path.abspath(os.path.join(project_path, "autograsper", "recorded_data", experiment))
+        else:
+            raise Exception("Either abs_path or experiment should be provided")
+        
         self.transform = transforms.ToTensor()
 
         self.bottom_images = []
