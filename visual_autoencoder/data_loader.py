@@ -119,23 +119,39 @@ def load_image(image_path):
     return img
 
 
-def concatenate_images(bottom_img, top_img):
-    bottom_img = bottom_img.numpy()
-    top_img = top_img.numpy()
+def concatenate_images(bottom_img, top_img, space=15):
+    if bottom_img.shape[0] != top_img.shape[0]:
+        bottom_img, top_img = resize_images(bottom_img, top_img)
+
+    # white space between images
+    white_img = np.ones((bottom_img.shape[0], space, 3))
+
+    return np.concatenate([bottom_img, white_img, top_img],axis=1)
+
+def resize_images(bottom_img, top_img, color="RGB"):
+    if not isinstance(bottom_img, np.ndarray):
+        bottom_img = bottom_img.numpy()
+    if not isinstance(top_img, np.ndarray):
+        top_img = top_img.numpy()
 
     height = min(bottom_img.shape[0], top_img.shape[0])
     bottom_img = cv2.resize(bottom_img, (int(bottom_img.shape[1] * height / bottom_img.shape[0]), height))
     top_img = cv2.resize(top_img, (int(top_img.shape[1] * height / top_img.shape[0]), height))
 
-    # Convert the image from BGR (OpenCV format) to RGB (Matplotlib format)
-    bottom_img = cv2.cvtColor(bottom_img, cv2.COLOR_BGR2RGB)
-    top_img = cv2.cvtColor(top_img, cv2.COLOR_BGR2RGB)
+    if color == "RGB":
+        # Convert the image from BGR (OpenCV format) to RGB (Matplotlib format)
+        bottom_img = cv2.cvtColor(bottom_img, cv2.COLOR_BGR2RGB)
+        top_img = cv2.cvtColor(top_img, cv2.COLOR_BGR2RGB)
 
-    return np.concatenate([bottom_img, top_img],axis=1)
+    return bottom_img, top_img
 
-def plot_images(bottom_img, top_img):
-    figure = plt.figure(figsize=(15, 5))
+def plot_images(bottom_img, top_img, title=None):
+    fig, ax = plt.subplots(figsize=(15, 5))
     concatenated_img = concatenate_images(bottom_img, top_img)
-    plt.imshow(concatenated_img)
-    plt.axis('off')
-    plt.gca().set_aspect('auto') 
+
+    ax.imshow(concatenated_img)
+    ax.axis('off')
+    ax.set_aspect('auto') 
+    if title is not None:
+        ax.set_title(title, fontsize=18)  
+    plt.show()
