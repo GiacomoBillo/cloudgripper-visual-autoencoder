@@ -1,0 +1,3 @@
+[submodule "grounded_sam_2"]
+	path = grounded_sam_2
+	url = https://github.com/IDEA-Research/Grounded-SAM-2.git
