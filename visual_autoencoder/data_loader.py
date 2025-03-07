@@ -6,8 +6,9 @@ import numpy as np
 import cv2
 import os
 import json
+from tqdm import tqdm
 
-
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -155,3 +156,62 @@ def plot_images(bottom_img, top_img, title=None):
     if title is not None:
         ax.set_title(title, fontsize=18)  
     plt.show()
+
+
+def compute_mean_images(dataloader: DataLoader, path="", name=""):
+    """
+    Args:
+        dataloader (DataLoader)
+    
+    Returns:
+        mean_bottom (np.array): mean of bottom images
+        mean_top (np.array): mean of top images
+    """
+    sum_bottom = None
+    sum_top = None
+
+    for batch in tqdm(dataloader):
+        bottom_img, top_img, state = batch
+
+        # use GPU if available
+        bottom_img = bottom_img.to(DEVICE)
+        top_img = top_img.to(DEVICE)
+
+        if sum_bottom is None:
+            sum_bottom = bottom_img.numpy().mean(axis=0)
+            sum_top = top_img.numpy().mean(axis=0)
+        else:
+            sum_bottom += bottom_img.numpy().mean(axis=0)
+            sum_top += top_img.numpy().mean(axis=0)
+        
+    mean_bottom = sum_bottom / len(dataloader)
+    mean_top = sum_top / len(dataloader)
+
+    # store images
+    store_images(mean_bottom, mean_top, path, name)
+
+    return mean_bottom, mean_top
+
+
+def store_images(bottom_img, top_img, path="", name=""):
+    if path!="" and not os.path.exists(path):
+        os.makedirs(path)
+
+    if bottom_img.dtype == np.float32:
+        bottom_img = (bottom_img * 255).astype(np.uint8)
+    if top_img.dtype == np.float32:
+        top_img = (top_img * 255).astype(np.uint8)
+    cv2.imwrite(os.path.join(path,f"bottom{name}.jpeg"), bottom_img)
+    cv2.imwrite(os.path.join(path,f"top{name}.jpeg"), top_img)
+
+
+def load_images(path="", name=""):
+    bottom_img = cv2.imread(os.path.join(path, f"bottom{name}.jpeg"))
+    top_img = cv2.imread(os.path.join(path, f"top{name}.jpeg"))
+
+    if bottom_img.dtype == np.uint8:
+        bottom_img = bottom_img.astype(np.float32) / 255
+    if top_img.dtype == np.uint8:
+        top_img = top_img.astype(np.float32) / 255
+
+    return bottom_img, top_img
