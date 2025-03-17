@@ -81,7 +81,7 @@ class GripperDataset(Dataset):
 
         bottom_img = self.transform(bottom_img)
         top_img = self.transform(top_img)
-        state_values = torch.tensor(list(map(float, state.values())), dtype=torch.float32)
+        state_values = torch.tensor(list(map(float, state.values())), dtype=torch.float32)[:5] # only the first 5 values
 
         return bottom_img, top_img, state_values
     
@@ -109,13 +109,13 @@ def load_image(image_path):
         folder_path (str): absolute path of the folder
 
     Returns:
-        np.array of images of shape (num_images, height, width, rgb)
+        img: image as numpy array in RGB format (Channels, Height, Width)
     """
 
     img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     if img is None:
         raise Exception(f"Image {image_path} not found")
-    img = np.transpose(img, (1,2,0))
 
     return img
 
@@ -125,11 +125,14 @@ def concatenate_images(bottom_img, top_img, space=15):
         bottom_img, top_img = resize_images(bottom_img, top_img)
 
     # white space between images
-    white_img = np.ones((bottom_img.shape[0], space, 3))
+    if len(bottom_img.shape)==2:
+        white_img = np.ones((bottom_img.shape[0], space))
+    else:
+        white_img = np.ones((bottom_img.shape[0], space, bottom_img.shape[2]))
 
     return np.concatenate([bottom_img, white_img, top_img],axis=1)
 
-def resize_images(bottom_img, top_img, color="RGB"):
+def resize_images(bottom_img, top_img):
     if not isinstance(bottom_img, np.ndarray):
         bottom_img = bottom_img.numpy()
     if not isinstance(top_img, np.ndarray):
@@ -139,17 +142,27 @@ def resize_images(bottom_img, top_img, color="RGB"):
     bottom_img = cv2.resize(bottom_img, (int(bottom_img.shape[1] * height / bottom_img.shape[0]), height))
     top_img = cv2.resize(top_img, (int(top_img.shape[1] * height / top_img.shape[0]), height))
 
-    if color == "RGB":
-        # Convert the image from BGR (OpenCV format) to RGB (Matplotlib format)
-        bottom_img = cv2.cvtColor(bottom_img, cv2.COLOR_BGR2RGB)
-        top_img = cv2.cvtColor(top_img, cv2.COLOR_BGR2RGB)
-
     return bottom_img, top_img
 
+
+def transpose_channels_last(img):
+    if len(img.shape)==3 and img.shape[0]==3:
+        img = np.transpose(img, (1, 2, 0))
+    return img
+
+def transpose_channels_first(img):
+    if len(img.shape)==3 and img.shape[2]==3:
+        img = np.transpose(img, (2, 0, 1))
+    return img
+
 def plot_images(bottom_img, top_img, title=None):
-    fig, ax = plt.subplots(figsize=(15, 5))
+    # move RGB channels to the last dimension
+    bottom_img = transpose_channels_last(bottom_img)
+    top_img = transpose_channels_last(top_img)
+
     concatenated_img = concatenate_images(bottom_img, top_img)
 
+    fig, ax = plt.subplots(figsize=(15, 5))
     ax.imshow(concatenated_img)
     ax.axis('off')
     ax.set_aspect('auto') 
@@ -171,18 +184,18 @@ def compute_mean_images(dataloader: DataLoader, path="", name=""):
     sum_top = None
 
     for batch in tqdm(dataloader):
-        bottom_img, top_img, state = batch
+        bottom_images, top_images, states = batch
 
         # use GPU if available
-        bottom_img = bottom_img.to(DEVICE)
-        top_img = top_img.to(DEVICE)
+        bottom_images = bottom_images.to(DEVICE)
+        top_images = top_images.to(DEVICE)
 
         if sum_bottom is None:
-            sum_bottom = bottom_img.numpy().mean(axis=0)
-            sum_top = top_img.numpy().mean(axis=0)
+            sum_bottom = bottom_images.numpy().mean(axis=0)
+            sum_top = top_images.numpy().mean(axis=0)
         else:
-            sum_bottom += bottom_img.numpy().mean(axis=0)
-            sum_top += top_img.numpy().mean(axis=0)
+            sum_bottom += bottom_images.numpy().mean(axis=0)
+            sum_top += top_images.numpy().mean(axis=0)
         
     mean_bottom = sum_bottom / len(dataloader)
     mean_top = sum_top / len(dataloader)
@@ -194,6 +207,10 @@ def compute_mean_images(dataloader: DataLoader, path="", name=""):
 
 
 def store_images(bottom_img, top_img, path="", name=""):
+    # move RGB channels to the last dimension
+    bottom_img = transpose_channels_last(bottom_img)
+    top_img = transpose_channels_last(top_img)
+
     if path!="" and not os.path.exists(path):
         os.makedirs(path)
 
@@ -208,6 +225,10 @@ def store_images(bottom_img, top_img, path="", name=""):
 def load_images(path="", name=""):
     bottom_img = cv2.imread(os.path.join(path, f"bottom{name}.jpeg"))
     top_img = cv2.imread(os.path.join(path, f"top{name}.jpeg"))
+
+    # move RGB channels to the first dimension
+    bottom_img = transpose_channels_first(bottom_img)
+    top_img = transpose_channels_first(top_img) 
 
     if bottom_img.dtype == np.uint8:
         bottom_img = bottom_img.astype(np.float32) / 255
