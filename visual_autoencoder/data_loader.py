@@ -236,3 +236,19 @@ def load_images(path="", name=""):
         top_img = top_img.astype(np.float32) / 255
 
     return bottom_img, top_img
+
+
+# segmentation
+def create_mask(img, environment):
+    epsilon = 1e-8
+    threshold = 1
+
+    subtraction = np.abs(np.log(environment +epsilon) - np.log(img +epsilon))
+    # sum RGB values
+    mask = subtraction.sum(axis=0)[np.newaxis,:,:]
+    # threshold mask
+    mask = np.where(np.repeat(mask,3,axis=0)<threshold, 0, 1).astype(np.float32)
+    return mask
+
+def apply_mask(img, mask):
+    return np.where(img, mask, 0).astype(np.float32)
