@@ -239,16 +239,25 @@ def load_images(path="", name=""):
 
 
 # segmentation
-def create_mask(img, environment):
-    epsilon = 1e-8
-    threshold = 1
+class MaskEngine():
+    def __init__(self, environment):
+        self.environment = environment
 
-    subtraction = np.abs(np.log(environment +epsilon) - np.log(img +epsilon))
-    # sum RGB values
-    mask = subtraction.sum(axis=0)[np.newaxis,:,:]
-    # threshold mask
-    mask = np.where(np.repeat(mask,3,axis=0)<threshold, 0, 1).astype(np.float32)
-    return mask
+    def create_mask(self, img):
+        epsilon = 1e-8
+        threshold = 1
 
-def apply_mask(img, mask):
-    return np.where(img, mask, 0).astype(np.float32)
+        # from single image to batch form
+        if len(img.shape) == 3:
+            img = img.unsqueeze(0)
+
+        subtraction = torch.abs(torch.log(self.environment +epsilon) - torch.log(img +epsilon))
+        # sum RGB values
+        mask = torch.sum(subtraction, dim=1, keepdim=True)
+        # threshold mask
+        mask = (mask > threshold)
+        return mask
+
+    def apply_mask(self, img, mask):
+        return img * mask
+        # return np.where(mask, img, 0).astype(np.float32)
