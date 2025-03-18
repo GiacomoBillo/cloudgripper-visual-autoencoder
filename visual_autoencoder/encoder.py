@@ -4,7 +4,7 @@ from torchvision import models
 from torchvision.models import ResNet18_Weights
 from tqdm import tqdm
 from early_stopping_pytorch import EarlyStopping
-from visual_autoencoder.data_loader import create_mask, apply_mask
+from visual_autoencoder.data_loader import MaskEngine
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -37,9 +37,14 @@ after the first layer, the pooling layer fix the size
 """
 
 
+# Encoder from image to robot state
 class Encoder():
-    def __init__(self, fc_layers_on_top, model_name="encoder"):
+    def __init__(self, fc_layers_on_top, model_name="encoder", encoder_from_mask=False, mask_engine_top=None):
         self.model_name = model_name
+        self.encoder_from_mask = encoder_from_mask
+        if encoder_from_mask:
+            assert isinstance(mask_engine_top, MaskEngine)
+            self.mask_engine_top = mask_engine_top
 
         # transfer learning
         self.resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -58,7 +63,16 @@ class Encoder():
     def forward(self, x):
         return self.resnet(x)
     
-    def _train_step(self, batch, from_masked_robot, loss_function, optimizer: torch.optim.Optimizer):
+    def _process_input(self, images):
+        if self.encoder_from_mask:
+            # online computation of the mask
+            masks = self.mask_engine_top.create_mask(images)
+            masked_images = self.mask_engine_top.apply_mask(images, masks)
+            return masked_images
+        else:
+            return images
+    
+    def _train_step(self, batch, loss_function, optimizer: torch.optim.Optimizer):
         self.resnet.train() # set train mode
 
         bottom_images, top_images, state_labels = batch
@@ -66,11 +80,7 @@ class Encoder():
         top_images = top_images.to(DEVICE)
         state_labels = state_labels.to(DEVICE)
 
-        if from_masked_robot:
-            # online computation of the mask
-            _, input_images = mask_robot(bottom_images, top_images)
-        else:
-            input_images = top_images
+        input_images = self._process_input(top_images)
 
         optimizer.zero_grad() # reset gradients
         prediction = self.resnet(input_images)
@@ -81,7 +91,7 @@ class Encoder():
         return loss.item() # convert tensor to scalar
     
 
-    def _validation_step(self, batch, from_masked_robot, loss_function):
+    def _validation_step(self, batch, loss_function):
         self.resnet.eval() # set eval mode
 
         bottom_images, top_images, state_labels = batch
@@ -89,10 +99,7 @@ class Encoder():
         top_images = top_images.to(DEVICE)
         state_labels = state_labels.to(DEVICE)
 
-        if from_masked_robot:
-            _, input_images = mask_robot(bottom_images, top_images)
-        else:
-            input_images = top_images
+        input_images = self._process_input(top_images)
 
         with torch.no_grad():
             prediction = self.resnet(input_images)
@@ -101,7 +108,7 @@ class Encoder():
         return loss.item() # convert tensor to scalar
 
 
-    def train_model(self, train_loader, val_loader=None, epochs=10, from_masked_robot=False, loss_function=None, optimizer=None):
+    def train_model(self, train_loader, val_loader=None, epochs=100, from_masked_robot=False, loss_function=None, optimizer=None):
         self.resnet.train() # set train mode
 
         if loss_function is None:
@@ -172,15 +179,19 @@ class Encoder():
             top_images = top_images.to(DEVICE)
             state_labels = state_labels.to(DEVICE)
 
+            input_images = self._process_input(top_images)
+
             with torch.no_grad():
-                predictions = self.resnet(top_images)
+                predictions = self.resnet(input_images)
             total_loss += loss_function(predictions, state_labels).item()
 
         return total_loss / len(data_loader)
 
 
-def train_or_load():
-    pass
+    @staticmethod
+    def train_or_load():
+        pass
+
 
 
 if __name__ == "__main__":
