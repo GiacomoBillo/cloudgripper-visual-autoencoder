@@ -1,10 +1,12 @@
 import os
 import torch
-from torchvision import models
+from torchvision import models, transforms
 from torchvision.models import ResNet18_Weights
 from tqdm import tqdm
 from early_stopping_pytorch import EarlyStopping
-from visual_autoencoder.data_loader import MaskEngine
+from data_loader import MaskEngine, GripperDataset, DataLoader
+import cv2
+import json
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -41,6 +43,8 @@ after the first layer, the pooling layer fix the size
 class Encoder():
     def __init__(self, fc_layers_on_top, model_name="encoder", encoder_from_mask=False, mask_engine_top=None):
         self.model_name = model_name
+        self.model_path = os.path.join('checkpoints',f'{self.model_name}.pt')
+
         self.encoder_from_mask = encoder_from_mask
         if encoder_from_mask:
             assert isinstance(mask_engine_top, MaskEngine)
@@ -48,9 +52,11 @@ class Encoder():
 
         # transfer learning
         self.resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+        # freeze all layers
+        for param in self.resnet.parameters():
+            param.requires_grad = False
 
         # add fully connected layers on top
-        self.resnet.fc = torch.nn.Sequential()
         previous_size = self.resnet.fc.in_features
         layers = []
         for i, layer_size in enumerate(fc_layers_on_top):
@@ -108,7 +114,7 @@ class Encoder():
         return loss.item() # convert tensor to scalar
 
 
-    def train_model(self, train_loader, val_loader=None, epochs=100, from_masked_robot=False, loss_function=None, optimizer=None):
+    def train_model(self, train_loader, val_loader=None, epochs=100, loss_function=None, optimizer=None):
         self.resnet.train() # set train mode
 
         if loss_function is None:
@@ -118,37 +124,36 @@ class Encoder():
 
         train_losses = []
         val_losses = []
-        early_stopping = EarlyStopping(patience=5, verbose=True, path='checkpoint.pt')
+        early_stopping = EarlyStopping(patience=10, verbose=True, path=self.model_path)
 
         for epoch in tqdm(range(epochs), desc="Epochs"): 
             # train step
             train_loss = 0
-            for i, batch in tqdm(enumerate(train_loader)):
-                train_loss += self._train_step(batch, from_masked_robot, loss_function, optimizer)   
+            for i, batch in tqdm(enumerate(train_loader), desc=f"training epoch {epoch}", total=len(train_loader), leave=False):
+                train_loss += self._train_step(batch, loss_function, optimizer)
+            train_loss /= len(train_loader)
             train_losses.append(train_loss)
 
             # validation step
             if val_loader is not None:
                 val_loss = 0
-                for i, batch in tqdm(enumerate(val_loader)):
+                for i, batch in tqdm(enumerate(val_loader), desc=f"validation epoch {epoch}", total=len(val_loader), leave=False):
                     val_loss += self._validation_step(batch, loss_function)
+                val_loss /= len(val_loader)
                 val_losses.append(val_loss)
-                loss = train_loss, val_loss
-            else:
-                loss = train_loss   
 
             # checkpoint
-            os.makedirs("checkpoints", exist_ok=True)
-            filename = f"checkpoints/{self.model_name}_epoch_{epoch}.pth"
-            torch.save({
-                        "epoch": epoch,
-                        "model_state_dict": self.resnet.state_dict(), 
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "loss": loss
-                        },
-                        filename)
-            print(f"Checkpoint epoch {epoch} saved at {filename}")
-            print(f"Epoch {epoch}, loss: {loss}")
+            # os.makedirs("checkpoints", exist_ok=True)
+            # filename = f"checkpoints/{self.model_name}_epoch_{epoch}.pth"
+            # torch.save({
+            #             "epoch": epoch,
+            #             "model_state_dict": self.resnet.state_dict(), 
+            #             "optimizer_state_dict": optimizer.state_dict(),
+            #             "loss": loss
+            #             },
+            #             filename)
+            # print(f"Checkpoint epoch {epoch} saved at {filename}")
+            print(f"Epoch {epoch} -> train_loss={train_loss}" + (f", validation_loss={val_loss}" if val_loader is not None else ""))
 
             # early stopping
             early_stopping(val_loss, self.resnet)
@@ -157,12 +162,23 @@ class Encoder():
                 break
         
         # load the last checkpoint with the best model
-        self.resnet.load_state_dict(torch.load('checkpoint.pt', weights_only=True))
+        self.load_model()
 
+        self.save_learning_curve(train_losses, "training")
         if val_loader is not None:
+            self.save_learning_curve(val_losses, "validation")
             return train_losses, val_losses
         return train_losses
     
+
+    def load_model(self):
+        self.resnet.load_state_dict(torch.load(self.model_path, weights_only=True))
+
+
+    def save_learning_curve(self, losses, curve_name):
+        filename = os.path.join('checkpoints',f'{curve_name}_curve_{self.model_name}.json')
+        with open(filename, "w") as file:
+            json.dump(losses, file)
     
     def eval(self):
         self.resnet.eval()
@@ -186,22 +202,83 @@ class Encoder():
             total_loss += loss_function(predictions, state_labels).item()
 
         return total_loss / len(data_loader)
+    
 
-
-    @staticmethod
-    def train_or_load():
-        pass
-
+    def get_model_path(self):
+        return self.model_path
+        
 
 
 if __name__ == "__main__":
 
     # transform needed for resnet
-    from torchvision import transforms
     preprocess = transforms.Compose([
         # transforms.Resize(256),
         # transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+
+    # dataset
+    batch_size = 10
+    experiment = "data_collection_clean_env"
+    sessions = [str(session) for session in range(1,21)] # first 20 sessions
+    path = "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\data_collection_clean_env"
+    # dataset = GripperDataset(experiment=experiment, sessions=sessions)
+    dataset = GripperDataset(abs_path=path, sessions=sessions, transform=preprocess)
+    # split data (train-test)
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.8, 0.1, 0.1])
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #shuffle before training
+    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+
+    # load environment images
+    env_img_path = os.path.join("visual_autoencoder", "clean_environment_images", "top_mean_Experiment_data_collection_clean_env.jpeg")
+    if os.path.exists(env_img_path):
+        environment_img = preprocess(cv2.imread(env_img_path))
+    else:
+        raise NameError(f"{env_img_path} does not exists")
+    # create MaskEngine
+    mask_engine = MaskEngine(environment_img)
+
+
+    # hyperparameters
+    fc_layers_on_top = [5] # sizes of the fully connected layers on top of the ResNet, the last is the dimension of the output
+
+
+    # Encoder from original image
+    # model_name = "encoder_fc_" + "_".join(map(str,fc_layers_on_top))
+    # encoder = Encoder(
+    #     fc_layers_on_top=fc_layers_on_top,
+    #     model_name=model_name
+    # )
+    # Encoder from masked robot
+    model_name = "masked_robot_encoder_fc_" + "_".join(map(str,fc_layers_on_top))
+    encoder = Encoder(
+        fc_layers_on_top=fc_layers_on_top,
+        model_name=model_name,
+        encoder_from_mask=True,
+        mask_engine_top=mask_engine,
+    )
+
+    # load or train
+    if os.path.exists(encoder.get_model_path()):
+        print("Load existing model")
+        encoder.load_model()
+    else:
+        print("Train new model")
+        train_losses, val_losses = encoder.train_model(train_loader, val_loader)
+
+    # save and plot losses
+
+    # plt.plot(train_losses, label="Training loss")
+    # plt.plot(val_losses, label="Validation loss")
+    # plt.xlabel("Epochs")
+    # plt.ylabel("MSE Loss")
+    # plt.legend()
+    # plt.show()
+
+    # evaluation on test dataset
+    test_mse = encoder.eval_performance(test_loader)
+    print(f"Model performance on test dataset: {test_mse}")
 
