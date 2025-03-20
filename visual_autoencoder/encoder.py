@@ -4,7 +4,7 @@ from torchvision import models, transforms
 from torchvision.models import ResNet18_Weights
 from tqdm import tqdm
 from early_stopping_pytorch import EarlyStopping
-from gripper_data import MaskEngine, GripperDataset, DataLoader
+from gripper_data import GripperDataset, DataLoader
 import cv2
 import json
 
@@ -39,16 +39,11 @@ after the first layer, the pooling layer fix the size
 """
 
 
-# Encoder from image to robot state
+# Encoder from image (1 channel) to robot state
 class Encoder():
-    def __init__(self, fc_layers_on_top, model_name="encoder", encoder_from_mask=False, mask_engine_top=None):
+    def __init__(self, fc_layers_on_top, model_name="encoder"):
         self.model_name = model_name
         self.model_path = os.path.join('checkpoints',f'{self.model_name}.pt')
-
-        self.encoder_from_mask = encoder_from_mask
-        if encoder_from_mask:
-            assert isinstance(mask_engine_top, MaskEngine)
-            self.mask_engine_top = mask_engine_top
 
         # transfer learning
         self.resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -69,28 +64,16 @@ class Encoder():
     def forward(self, x):
         return self.resnet(x)
     
-    def _process_input(self, images):
-        if self.encoder_from_mask:
-            # online computation of the mask
-            masks = self.mask_engine_top.create_mask(images)
-            masked_images = self.mask_engine_top.apply_mask(images, masks)
-            return masked_images
-        else:
-            return images
-    
     def _train_step(self, batch, loss_function, optimizer: torch.optim.Optimizer):
         self.resnet.train() # set train mode
 
-        bottom_images, top_images, state_labels = batch
-        bottom_images = bottom_images.to(DEVICE)
-        top_images = top_images.to(DEVICE)
+        images, state_labels = batch
+        images = images.to(DEVICE)
         state_labels = state_labels.to(DEVICE)
 
-        input_images = self._process_input(top_images)
-
         optimizer.zero_grad() # reset gradients
-        prediction = self.resnet(input_images)
-        loss = loss_function(prediction, state_labels)
+        prediction = self.resnet(images) # predict state from image
+        loss = loss_function(prediction, state_labels) # compute loss
         loss.backward() # backpropagation
         optimizer.step() # update weights
 
@@ -100,15 +83,14 @@ class Encoder():
     def _validation_step(self, batch, loss_function):
         self.resnet.eval() # set eval mode
 
-        bottom_images, top_images, state_labels = batch
-        bottom_images = bottom_images.to(DEVICE)
-        top_images = top_images.to(DEVICE)
+        images, state_labels = batch
+        images = images.to(DEVICE)
         state_labels = state_labels.to(DEVICE)
 
-        input_images = self._process_input(top_images)
-
         with torch.no_grad():
-            prediction = self.resnet(input_images)
+            # predict state from image
+            prediction = self.resnet(images)
+            # compute loss 
             loss = loss_function(prediction, state_labels)
 
         return loss.item() # convert tensor to scalar
@@ -223,42 +205,27 @@ if __name__ == "__main__":
     batch_size = 10
     experiment = "data_collection_clean_env"
     sessions = [str(session) for session in range(1,21)] # first 20 sessions
-    path = "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\data_collection_clean_env"
-    # dataset = GripperDataset(experiment=experiment, sessions=sessions)
-    dataset = GripperDataset(abs_path=path, sessions=sessions, transform=preprocess)
+    images_to_load = ["Top_masked_images"]
+    # images_to_load = ["Images"]
+    dataset = GripperDataset(experiment=experiment, sessions=sessions, transform=preprocess)
+    # dataset = GripperDataset(abs_path=path, sessions=sessions, transform=preprocess)
+    
     # split data (train-test)
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.8, 0.1, 0.1])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #shuffle before training
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-    # load environment images
-    env_img_path = os.path.join("visual_autoencoder", "clean_environment_images", "top_mean_Experiment_data_collection_clean_env.jpeg")
-    if os.path.exists(env_img_path):
-        environment_img = preprocess(cv2.imread(env_img_path))
-    else:
-        raise NameError(f"{env_img_path} does not exists")
-    # create MaskEngine
-    mask_engine = MaskEngine(environment_img)
-
 
     # hyperparameters
     fc_layers_on_top = [5] # sizes of the fully connected layers on top of the ResNet, the last is the dimension of the output
 
 
-    # Encoder from original image
-    # model_name = "encoder_fc_" + "_".join(map(str,fc_layers_on_top))
-    # encoder = Encoder(
-    #     fc_layers_on_top=fc_layers_on_top,
-    #     model_name=model_name
-    # )
-    # Encoder from masked robot
-    model_name = "masked_robot_encoder_fc_" + "_".join(map(str,fc_layers_on_top))
+    # Encoder
+    model_name = "encoder_fc_" + "_".join(map(str,fc_layers_on_top))
     encoder = Encoder(
         fc_layers_on_top=fc_layers_on_top,
-        model_name=model_name,
-        encoder_from_mask=True,
-        mask_engine_top=mask_engine,
+        model_name=model_name
     )
 
     # load or train
