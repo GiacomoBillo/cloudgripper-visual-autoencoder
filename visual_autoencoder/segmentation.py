@@ -2,7 +2,7 @@ import torch
 import os
 import cv2
 import re
-from data_loader import GripperDataset, store_image
+from gripper_data import GripperDataset, store_image
 from tqdm import tqdm
 from torchvision import transforms
 
