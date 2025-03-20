@@ -34,7 +34,7 @@ class GripperDataset(Dataset):
 
         # load each sessions
         for session in sessions:
-            session_path = os.path.join(data_path, session, "task")
+            session_path = os.path.join(data_path, str(session), "task")
 
             # skip JSON files
             if not os.path.isdir(session_path):
@@ -146,12 +146,12 @@ def resize_images(bottom_img, top_img):
 
 
 def transpose_channels_last(img):
-    if len(img.shape)==3 and img.shape[0]==3:
+    if len(img.shape)==3 and img.shape[0]==min(img.shape):
         img = np.transpose(img, (1, 2, 0))
     return img
 
 def transpose_channels_first(img):
-    if len(img.shape)==3 and img.shape[2]==3:
+    if len(img.shape)==3 and img.shape[2]==min(img.shape):
         img = np.transpose(img, (2, 0, 1))
     return img
 
@@ -206,6 +206,33 @@ def compute_mean_images(dataloader: DataLoader, path="", name=""):
     return mean_bottom, mean_top
 
 
+def store_image(img, path):
+    """
+    Save image with shape (H,W,3) dtype=uint8
+    Args
+        img : image of shape (H,W,3) or (3,H,W) and dtype uint8 or float32
+        path : saving position, it creates the directory if it doesn't exist
+    Returns
+        True if saved successfully
+    """
+    if isinstance(img, torch.Tensor):
+        img = img.numpy()
+    img = transpose_channels_last(img)
+    if img.dtype == np.float32:
+        img = (img * 255).astype(np.uint8)
+    elif img.dtype == bool: # mask
+        img = img.astype(np.uint8) * 255
+    # if img.shape[2] == 1: # 2D image
+    #     img = img.squeeze(-1)
+        # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        # img = np.repeat(img, 3, axis=2)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    dir = os.path.dirname(path)
+    os.makedirs(dir, exist_ok=True)
+    return cv2.imwrite(path, img)
+    
+
 def store_images(bottom_img, top_img, path="", name=""):
     # move RGB channels to the last dimension
     bottom_img = transpose_channels_last(bottom_img)
@@ -237,27 +264,3 @@ def load_images(path="", name=""):
 
     return bottom_img, top_img
 
-
-# segmentation
-class MaskEngine():
-    def __init__(self, environment):
-        self.environment = environment
-
-    def create_mask(self, img):
-        epsilon = 1e-8
-        threshold = 1
-
-        # from single image to batch form
-        if len(img.shape) == 3:
-            img = img.unsqueeze(0)
-
-        subtraction = torch.abs(torch.log(self.environment +epsilon) - torch.log(img +epsilon))
-        # sum RGB values
-        mask = torch.sum(subtraction, dim=1, keepdim=True)
-        # threshold mask
-        mask = (mask > threshold)
-        return mask
-
-    def apply_mask(self, img, mask):
-        return img * mask
-        # return np.where(mask, img, 0).astype(np.float32)
