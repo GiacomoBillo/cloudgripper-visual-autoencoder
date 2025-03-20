@@ -4,7 +4,7 @@ from torchvision import models, transforms
 from torchvision.models import ResNet18_Weights
 from tqdm import tqdm
 from early_stopping_pytorch import EarlyStopping
-from data_loader import MaskEngine, GripperDataset, DataLoader
+from gripper_data import MaskEngine, GripperDataset, DataLoader
 import cv2
 import json
 
