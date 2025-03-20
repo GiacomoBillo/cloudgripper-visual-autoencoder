@@ -6,13 +6,26 @@ import numpy as np
 import cv2
 import os
 import json
+from tqdm import tqdm
 
-
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
+"""
+Create Dataset object
+with
+- Images (by default "Bottom_images","Images")
+    - 1 or more between ["Bottom_images","Images", "Top_masked_images", "Top_masks"]
+- States (states.json)
+"""
 class GripperDataset(Dataset):
-    def __init__(self, abs_path=None, experiment=None, sessions=None):
+    def __init__(self, 
+                 abs_path=None, 
+                 experiment=None, 
+                 sessions=None,
+                 images_to_load=["Bottom_images","Images"]
+                 ):
         # get dataset from absolute path or default path and experiment name
         if abs_path is not None:
             data_path = abs_path
@@ -21,10 +34,16 @@ class GripperDataset(Dataset):
         else:
             raise Exception("Either abs_path or experiment should be provided")
         
+        # NOTE: transform.ToTensor() reshape the image (H,W,C) -> (C,H,W)
         self.transform = transforms.ToTensor()
 
-        self.bottom_images = []
-        self.top_images = []
+        # always load states and load images chosen (by default original bottom and top)
+        self.images_to_load = images_to_load
+        self.images = {}
+        for image_type in images_to_load:
+            self.images[image_type] = []
+        # self.bottom_images = []
+        # self.top_images = []
         self.states = []
 
         # load all recording sessions
@@ -33,27 +52,39 @@ class GripperDataset(Dataset):
 
         # load each sessions
         for session in sessions:
-            session_path = os.path.join(data_path, session, "task")
+            session_path = os.path.join(data_path, str(session), "task")
 
             # skip JSON files
             if not os.path.isdir(session_path):
                 continue
-
-            bottom_images_path = os.path.abspath(os.path.join(session_path, "Bottom_Images")) 
-            top_images_path = os.path.abspath(os.path.join(session_path, "Images")) 
+            
+            image_path = {}
+            for image_type in images_to_load:
+                image_path[image_type] = os.path.abspath(os.path.join(session_path, image_type)) 
+            # bottom_images_path = os.path.abspath(os.path.join(session_path, "Bottom_Images")) 
+            # top_images_path = os.path.abspath(os.path.join(session_path, "Images")) 
             states_path = os.path.abspath(os.path.join(session_path, "states.json")) 
 
             print(f"Loading data session {session}")
-            new_bottom_images = os.listdir(bottom_images_path)
-            new_bottom_images = [os.path.join(bottom_images_path, img) for img in new_bottom_images]
-            new_top_images = os.listdir(top_images_path)
-            new_top_images = [os.path.join(top_images_path, img) for img in new_top_images]
+            new_images = {}
+            for image_type in images_to_load:
+                new_images[image_type] = os.listdir(image_path[image_type])
+                new_images[image_type] = [os.path.join(image_path[image_type], img) for img in new_images[image_type]]
+            # new_bottom_images = os.listdir(bottom_images_path)
+            # new_bottom_images = [os.path.join(bottom_images_path, img) for img in new_bottom_images]
+            # new_top_images = os.listdir(top_images_path)
+            # new_top_images = [os.path.join(top_images_path, img) for img in new_top_images]
             new_states = load_states(states_path)
 
-            assert (len(new_bottom_images)==len(new_top_images) and len(new_bottom_images)==len(new_states)), f"Mismatch in the number of states, bottom and top images in session {session}"
+            # assert that all the folders have the same number of elements
+            for lst in new_images.values():
+                assert len(lst)==len(new_states), f"Mismatch between the number of states and elements in some image directory, in session {session}"
+            # assert (len(new_bottom_images)==len(new_top_images) and len(new_bottom_images)==len(new_states)), f"Mismatch in the number of states, bottom and top images in session {session}"
 
-            self.bottom_images.extend(new_bottom_images)
-            self.top_images.extend(new_top_images)
+            for image_type in images_to_load:
+                self.images[image_type].extend(new_images[image_type])
+            # self.bottom_images.extend(new_bottom_images)
+            # self.top_images.extend(new_top_images)
             self.states.extend(new_states)
 
 
@@ -71,18 +102,26 @@ class GripperDataset(Dataset):
         
         Returns
             bottom_image, top_image, state as Tensor """
-        bottom_img_path = self.bottom_images[index]
-        top_img_path = self.top_images[index]
+        images = {}
+        for image_type in self.images_to_load:
+            image_path = self.images[image_type][index]
+            images[image_type] = load_image(image_path)
+            images[image_type] = self.transform(images[image_type])
+
+        # bottom_img_path = self.bottom_images[index]
+        # top_img_path = self.top_images[index]
+        # bottom_img = load_image(bottom_img_path)
+        # top_img = load_image(top_img_path)
+        # bottom_img = self.transform(bottom_img)
+        # top_img = self.transform(top_img)
+
         state = self.states[index]
+        # load only 5 state values
+        state_values = torch.tensor(list(map(float, state.values())), dtype=torch.float32)[:5] # only the first 5 values
 
-        bottom_img = load_image(bottom_img_path)
-        top_img = load_image(top_img_path)
-
-        bottom_img = self.transform(bottom_img)
-        top_img = self.transform(top_img)
-        state_values = torch.tensor(list(map(float, state.values())), dtype=torch.float32)
-
-        return bottom_img, top_img, state_values
+        # return bottom_img, top_img, state_values
+        ordered_list_of_images = [images[image_type] for image_type in self.images_to_load]
+        return (*ordered_list_of_images, state_values)
     
 
 def load_states(states_path):
@@ -108,13 +147,13 @@ def load_image(image_path):
         folder_path (str): absolute path of the folder
 
     Returns:
-        np.array of images of shape (num_images, height, width, rgb)
+        img: image as numpy array in RGB format (Channels, Height, Width)
     """
 
     img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     if img is None:
         raise Exception(f"Image {image_path} not found")
-    img = np.transpose(img, (1,2,0))
 
     return img
 
@@ -124,11 +163,14 @@ def concatenate_images(bottom_img, top_img, space=15):
         bottom_img, top_img = resize_images(bottom_img, top_img)
 
     # white space between images
-    white_img = np.ones((bottom_img.shape[0], space, 3))
+    if len(bottom_img.shape)==2:
+        white_img = np.ones((bottom_img.shape[0], space))
+    else:
+        white_img = np.ones((bottom_img.shape[0], space, bottom_img.shape[2]))
 
     return np.concatenate([bottom_img, white_img, top_img],axis=1)
 
-def resize_images(bottom_img, top_img, color="RGB"):
+def resize_images(bottom_img, top_img):
     if not isinstance(bottom_img, np.ndarray):
         bottom_img = bottom_img.numpy()
     if not isinstance(top_img, np.ndarray):
@@ -138,20 +180,125 @@ def resize_images(bottom_img, top_img, color="RGB"):
     bottom_img = cv2.resize(bottom_img, (int(bottom_img.shape[1] * height / bottom_img.shape[0]), height))
     top_img = cv2.resize(top_img, (int(top_img.shape[1] * height / top_img.shape[0]), height))
 
-    if color == "RGB":
-        # Convert the image from BGR (OpenCV format) to RGB (Matplotlib format)
-        bottom_img = cv2.cvtColor(bottom_img, cv2.COLOR_BGR2RGB)
-        top_img = cv2.cvtColor(top_img, cv2.COLOR_BGR2RGB)
-
     return bottom_img, top_img
 
+
+def transpose_channels_last(img):
+    if len(img.shape)==3 and img.shape[0]==min(img.shape):
+        img = np.transpose(img, (1, 2, 0))
+    return img
+
+def transpose_channels_first(img):
+    if len(img.shape)==3 and img.shape[2]==min(img.shape):
+        img = np.transpose(img, (2, 0, 1))
+    return img
+
 def plot_images(bottom_img, top_img, title=None):
-    fig, ax = plt.subplots(figsize=(15, 5))
+    # move RGB channels to the last dimension
+    bottom_img = transpose_channels_last(bottom_img)
+    top_img = transpose_channels_last(top_img)
+
     concatenated_img = concatenate_images(bottom_img, top_img)
 
+    fig, ax = plt.subplots(figsize=(15, 5))
     ax.imshow(concatenated_img)
     ax.axis('off')
     ax.set_aspect('auto') 
     if title is not None:
         ax.set_title(title, fontsize=18)  
     plt.show()
+
+
+def compute_mean_images(dataloader: DataLoader, path="", name=""):
+    """
+    Args:
+        dataloader (DataLoader)
+    
+    Returns:
+        mean_bottom (np.array): mean of bottom images
+        mean_top (np.array): mean of top images
+    """
+    sum_bottom = None
+    sum_top = None
+
+    for batch in tqdm(dataloader):
+        bottom_images, top_images, states = batch
+
+        # use GPU if available
+        bottom_images = bottom_images.to(DEVICE)
+        top_images = top_images.to(DEVICE)
+
+        if sum_bottom is None:
+            sum_bottom = bottom_images.numpy().mean(axis=0)
+            sum_top = top_images.numpy().mean(axis=0)
+        else:
+            sum_bottom += bottom_images.numpy().mean(axis=0)
+            sum_top += top_images.numpy().mean(axis=0)
+        
+    mean_bottom = sum_bottom / len(dataloader)
+    mean_top = sum_top / len(dataloader)
+
+    # store images
+    store_images(mean_bottom, mean_top, path, name)
+
+    return mean_bottom, mean_top
+
+
+def store_image(img, path):
+    """
+    Save image with shape (H,W,3) dtype=uint8
+    Args
+        img : image of shape (H,W,3) or (3,H,W) and dtype uint8 or float32
+        path : saving position, it creates the directory if it doesn't exist
+    Returns
+        True if saved successfully
+    """
+    if isinstance(img, torch.Tensor):
+        img = img.numpy()
+    img = transpose_channels_last(img)
+    if img.dtype == np.float32:
+        img = (img * 255).astype(np.uint8)
+    elif img.dtype == bool: # mask
+        img = img.astype(np.uint8) * 255
+    # if img.shape[2] == 1: # 2D image
+    #     img = img.squeeze(-1)
+        # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        # img = np.repeat(img, 3, axis=2)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    dir = os.path.dirname(path)
+    os.makedirs(dir, exist_ok=True)
+    return cv2.imwrite(path, img)
+    
+
+def store_images(bottom_img, top_img, path="", name=""):
+    # move RGB channels to the last dimension
+    bottom_img = transpose_channels_last(bottom_img)
+    top_img = transpose_channels_last(top_img)
+
+    if path!="" and not os.path.exists(path):
+        os.makedirs(path)
+
+    if bottom_img.dtype == np.float32:
+        bottom_img = (bottom_img * 255).astype(np.uint8)
+    if top_img.dtype == np.float32:
+        top_img = (top_img * 255).astype(np.uint8)
+    cv2.imwrite(os.path.join(path,f"bottom{name}.jpeg"), bottom_img)
+    cv2.imwrite(os.path.join(path,f"top{name}.jpeg"), top_img)
+
+
+def load_images(path="", name=""):
+    bottom_img = cv2.imread(os.path.join(path, f"bottom{name}.jpeg"))
+    top_img = cv2.imread(os.path.join(path, f"top{name}.jpeg"))
+
+    # move RGB channels to the first dimension
+    bottom_img = transpose_channels_first(bottom_img)
+    top_img = transpose_channels_first(top_img) 
+
+    if bottom_img.dtype == np.uint8:
+        bottom_img = bottom_img.astype(np.float32) / 255
+    if top_img.dtype == np.uint8:
+        top_img = top_img.astype(np.float32) / 255
+
+    return bottom_img, top_img
+
