@@ -43,7 +43,7 @@ after the first layer, the pooling layer fix the size
 class Encoder():
     def __init__(self, fc_layers_on_top, model_name="encoder"):
         self.model_name = model_name
-        self.model_path = os.path.join('checkpoints',f'{self.model_name}.pt')
+        self.model_path = os.path.abspath(os.path.join(os.path.dirname(__file__),'checkpoints',f'{self.model_name}.pt'))
 
         # transfer learning
         self.resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -111,7 +111,7 @@ class Encoder():
         for epoch in tqdm(range(epochs), desc="Epochs"): 
             # train step
             train_loss = 0
-            for i, batch in tqdm(enumerate(train_loader), desc=f"training epoch {epoch}", total=len(train_loader), leave=False):
+            for i, batch in tqdm(enumerate(train_loader), desc=f"training epoch {epoch}", total=len(train_loader)):
                 train_loss += self._train_step(batch, loss_function, optimizer)
             train_loss /= len(train_loader)
             train_losses.append(train_loss)
@@ -119,7 +119,7 @@ class Encoder():
             # validation step
             if val_loader is not None:
                 val_loss = 0
-                for i, batch in tqdm(enumerate(val_loader), desc=f"validation epoch {epoch}", total=len(val_loader), leave=False):
+                for i, batch in tqdm(enumerate(val_loader), desc=f"validation epoch {epoch}", total=len(val_loader)):
                     val_loss += self._validation_step(batch, loss_function)
                 val_loss /= len(val_loader)
                 val_losses.append(val_loss)
@@ -158,7 +158,7 @@ class Encoder():
 
 
     def save_learning_curve(self, losses, curve_name):
-        filename = os.path.join('checkpoints',f'{curve_name}_curve_{self.model_name}.json')
+        filename = os.path.join(os.path.dirname(__file__),'checkpoints',f'{curve_name}_curve_{self.model_name}.json')
         with open(filename, "w") as file:
             json.dump(losses, file)
     
@@ -173,14 +173,12 @@ class Encoder():
             loss_function = torch.nn.MSELoss()
 
         total_loss = 0
-        for (bottom_images, top_images, state_labels) in data_loader:
-            top_images = top_images.to(DEVICE)
+        for (images, state_labels) in tqdm(data_loader, desc="Evaluation"):
+            images = images.to(DEVICE)
             state_labels = state_labels.to(DEVICE)
 
-            input_images = self._process_input(top_images)
-
             with torch.no_grad():
-                predictions = self.resnet(input_images)
+                predictions = self.resnet(images)
             total_loss += loss_function(predictions, state_labels).item()
 
         return total_loss / len(data_loader)
@@ -193,12 +191,22 @@ class Encoder():
 
 if __name__ == "__main__":
 
-    # transform needed for resnet
+    # transform for resnet
+    """
+    from pytorch ResNet18 documentation 
+    (https://pytorch.org/hub/pytorch_vision_resnet/):
+        All pre-trained models expect input images normalized in the same way, 
+        i.e. mini-batches of 3-channel RGB images of shape (3 x H x W), 
+        where H and W are expected to be at least 224. 
+        The images have to be loaded in to a range of [0, 1] and then normalized 
+        using mean = [0.485, 0.456, 0.406] and std = [0.229, 0.224, 0.225]
+    """
     preprocess = transforms.Compose([
-        # transforms.Resize(256),
-        # transforms.CenterCrop(224),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Resize((224,224)),
+        # transforms.Resize(256), # resizes the shorter side of the image to 256 pixels while maintaining the aspect ratio
+        # transforms.CenterCrop(224), # crops a 224×224 region from the center of the image 
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # mean and std of ImageNet dataset used for pretraining
     ])
 
     # dataset
@@ -207,11 +215,16 @@ if __name__ == "__main__":
     sessions = [str(session) for session in range(1,21)] # first 20 sessions
     images_to_load = ["Top_masked_images"]
     # images_to_load = ["Images"]
-    dataset = GripperDataset(experiment=experiment, sessions=sessions, transform=preprocess)
+    dataset = GripperDataset(experiment=experiment, 
+                             sessions=sessions, 
+                             transform=preprocess, 
+                             images_to_load=images_to_load)
     # dataset = GripperDataset(abs_path=path, sessions=sessions, transform=preprocess)
-    
+    print(f"Number of samples in the dataset: {len(dataset)}")
+
     # split data (train-test)
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.8, 0.1, 0.1])
+    split = [0.8, 0.01, 0.19]
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) #shuffle before training
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
@@ -234,7 +247,10 @@ if __name__ == "__main__":
         encoder.load_model()
     else:
         print("Train new model")
-        train_losses, val_losses = encoder.train_model(train_loader, val_loader)
+        train_losses, val_losses = encoder.train_model(train_loader, 
+                                                       val_loader,
+                                                       epochs=5
+                                                       )
 
     # save and plot losses
 

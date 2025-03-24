@@ -24,6 +24,7 @@ class GripperDataset(Dataset):
                  abs_path=None, 
                  experiment=None, 
                  sessions=None,
+                 transform=None,
                  images_to_load=["Bottom_images","Images"]
                  ):
         # get dataset from absolute path or default path and experiment name
@@ -35,7 +36,9 @@ class GripperDataset(Dataset):
             raise Exception("Either abs_path or experiment should be provided")
         
         # NOTE: transform.ToTensor() reshape the image (H,W,C) -> (C,H,W)
-        self.transform = transforms.ToTensor()
+        if transform is None:
+            transform = transforms.ToTensor()
+        self.transform = transform
 
         # always load states and load images chosen (by default original bottom and top)
         self.images_to_load = images_to_load
