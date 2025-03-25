@@ -24,6 +24,7 @@ class GripperDataset(Dataset):
                  abs_path=None, 
                  experiment=None, 
                  sessions=None,
+                 transform=None,
                  images_to_load=["Bottom_images","Images"]
                  ):
         # get dataset from absolute path or default path and experiment name
@@ -35,7 +36,9 @@ class GripperDataset(Dataset):
             raise Exception("Either abs_path or experiment should be provided")
         
         # NOTE: transform.ToTensor() reshape the image (H,W,C) -> (C,H,W)
-        self.transform = transforms.ToTensor()
+        if transform is None:
+            transform = transforms.ToTensor()
+        self.transform = transform
 
         # always load states and load images chosen (by default original bottom and top)
         self.images_to_load = images_to_load
@@ -118,6 +121,7 @@ class GripperDataset(Dataset):
         state = self.states[index]
         # load only 5 state values
         state_values = torch.tensor(list(map(float, state.values())), dtype=torch.float32)[:5] # only the first 5 values
+        state_values[3] = state_values[3] / 180 # normalize rotation angle
 
         # return bottom_img, top_img, state_values
         ordered_list_of_images = [images[image_type] for image_type in self.images_to_load]
