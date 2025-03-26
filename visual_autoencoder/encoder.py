@@ -124,12 +124,12 @@ class Encoder():
             # train step
             train_loss_sum = 0
             train_loss_per_latent_dim_sum = np.zeros(self.latent_dim)
-            for batch in tqdm(train_loader, desc=f"training epoch {epoch}", total=len(train_loader)):
+            for i, batch in tqdm(enumerate(train_loader), desc=f"training epoch {epoch}", total=len(train_loader)):
                 train_loss, train_loss_per_latent_dim = self._train_step(batch)
                 train_loss_sum += train_loss
                 train_loss_per_latent_dim_sum += train_loss_per_latent_dim
-            train_loss /= len(train_loader)
-            train_loss_per_latent_dim /= len(train_loader)
+            train_loss = train_loss_sum / len(train_loader)
+            train_loss_per_latent_dim = train_loss_per_latent_dim_sum / len(train_loader)
             train_losses.append(train_loss)
             train_losses_per_latent_dim.append(train_loss_per_latent_dim.tolist())
 
@@ -239,8 +239,8 @@ if __name__ == "__main__":
     batch_size = 8
     experiment = "data_collection_clean_env"
     sessions = [str(session) for session in range(1,21)] # first 20 sessions
-    images_to_load = ["Top_masked_images"]
-    # images_to_load = ["Images"]
+    # images_to_load = ["Top_masked_images"]
+    images_to_load = ["Images"]
     dataset = GripperDataset(experiment=experiment, 
                              sessions=sessions, 
                              transform=preprocess, 
@@ -249,6 +249,7 @@ if __name__ == "__main__":
     print(f"Number of samples in the dataset: {len(dataset)}")
 
     # split data (train-test)
+    torch.manual_seed(11) # Set fixed random number seed for reproducibility
     split = [0.2, 0.01, 0.79]
     num_workers = 0
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
@@ -259,10 +260,10 @@ if __name__ == "__main__":
 
     # hyperparameters
     fc_layers_on_top = [5] # sizes of the fully connected layers on top of the ResNet, the last is the dimension of the output
-
+    # fc_layers_on_top = [[5], [64, 5]]
 
     # Encoder
-    model_name = "PROVA_" + images_to_load[0] + "_encoder_fc_" + "_".join(map(str,fc_layers_on_top))
+    model_name = "2503" + images_to_load[0] + "_encoder_fc_" + "_".join(map(str,fc_layers_on_top))
     encoder = Encoder(
         fc_layers_on_top=fc_layers_on_top,
         model_name=model_name
@@ -276,7 +277,7 @@ if __name__ == "__main__":
         print("Train new model")
         train_losses, val_losses = encoder.train_model(train_loader, 
                                                        val_loader,
-                                                       epochs=10
+                                                       epochs=20
                                                        )
 
     # save and plot losses
