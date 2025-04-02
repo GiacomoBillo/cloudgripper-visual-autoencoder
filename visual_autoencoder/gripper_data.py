@@ -25,7 +25,8 @@ class GripperDataset(Dataset):
                  experiment=None, 
                  sessions=None,
                  transform=None,
-                 images_to_load=["Bottom_images","Images"]
+                 images_to_load=["Bottom_images","Images"],
+                 verbose=False
                  ):
         # get dataset from absolute path or default path and experiment name
         if abs_path is not None:
@@ -68,7 +69,8 @@ class GripperDataset(Dataset):
             # top_images_path = os.path.abspath(os.path.join(session_path, "Images")) 
             states_path = os.path.abspath(os.path.join(session_path, "states.json")) 
 
-            print(f"Loading data session {session}")
+            if verbose:
+                print(f"Loading data session {session}")
             new_images = {}
             for image_type in images_to_load:
                 new_images[image_type] = os.listdir(image_path[image_type])
