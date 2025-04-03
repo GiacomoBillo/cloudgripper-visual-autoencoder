@@ -61,7 +61,7 @@ class Encoder():
         elif architecture == "ResNet50":
             self.architecture = models.resnet50(weights=ResNet50_Weights.DEFAULT)
         elif architecture == "GoogLeNet":
-            self.architecture = models.googlenet(weights=GoogLeNet_Weights)
+            self.architecture = models.googlenet(weights=GoogLeNet_Weights.DEFAULT)
         else:
             raise ValueError(f"Architecture {architecture} not available")
         
