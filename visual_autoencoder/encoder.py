@@ -1,7 +1,7 @@
 import os
 import torch
 from torchvision import models, transforms
-from torchvision.models import ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, GoogLeNet_Weights
+from torchvision.models import ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, GoogLeNet_Weights, ViT_B_16_Weights
 from tqdm import tqdm
 from early_stopping_pytorch import EarlyStopping
 from gripper_data import GripperDataset, DataLoader
@@ -62,6 +62,8 @@ class Encoder():
             self.architecture = models.resnet50(weights=ResNet50_Weights.DEFAULT)
         elif architecture == "GoogLeNet":
             self.architecture = models.googlenet(weights=GoogLeNet_Weights.DEFAULT)
+        elif architecture == "ViT":
+            self.architecture = models.vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
         else:
             raise ValueError(f"Architecture {architecture} not available")
         
@@ -71,14 +73,17 @@ class Encoder():
 
         self.latent_dim = fc_layers_on_top[-1]
         # add fully connected layers on top
-        previous_size = self.architecture.fc.in_features
-        layers = []
-        for i, layer_size in enumerate(fc_layers_on_top):
-            layers.append(torch.nn.Linear(previous_size, layer_size))
-            if i != len(fc_layers_on_top) - 1: # linear activation for the last layer
-                layers.append(torch.nn.ReLU())
-            previous_size = layer_size
-        self.architecture.fc = torch.nn.Sequential(*layers)
+        if architecture == "ViT":
+            self.architecture.heads = torch.nn.Linear(self.architecture.hidden_dim, self.latent_dim)
+        else :
+            previous_size = self.architecture.fc.in_features
+            layers = []
+            for i, layer_size in enumerate(fc_layers_on_top):
+                layers.append(torch.nn.Linear(previous_size, layer_size))
+                if i != len(fc_layers_on_top) - 1: # linear activation for the last layer
+                    layers.append(torch.nn.ReLU())
+                previous_size = layer_size
+            self.architecture.fc = torch.nn.Sequential(*layers)
 
         self.partial_epoch = partial_epoch
         # loss function
@@ -246,7 +251,7 @@ class Encoder():
 
 if __name__ == "__main__":
 
-    architecture = "GoogLeNet"
+    architecture = "ViT"
     # hyperparameters
     fc_layers_on_top = [512, 512, 512, 5] # sizes of the fully connected layers on top of the ResNet, the last is the dimension of the output
     # fc_layers_on_top = [[5], [64, 5]]
@@ -257,14 +262,14 @@ if __name__ == "__main__":
     num_workers = 0
 
     # dataset
-    batch_size = 8
+    batch_size = 10
     # experiment = "data_collection_clean_env"
     dataset_path = os.getenv("DATASET_PATH")
-    sessions = [str(session) for session in range(1,5)] # first 20 sessions
+    sessions = [str(session) for session in range(1,6)] # first 20 sessions
     # images_to_load = ["Top_masked_images"]
     images_to_load = ["Images"]
 
-    partial_epoch = 1
+    partial_epoch = 0.2
 
 
     # transform for resnet
