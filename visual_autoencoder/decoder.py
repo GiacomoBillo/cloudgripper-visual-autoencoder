@@ -4,9 +4,12 @@ from tqdm import tqdm
 import os
 from gripper_data import GripperDataset, DataLoader
 import json
-
+from dotenv import load_dotenv
+load_dotenv()
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print("device:", DEVICE)
+
 
 """
 5D configuration of the robot -> 1 RGB pixel prediction
@@ -44,7 +47,7 @@ class PixelGenerator(torch.nn.Module):
         # add output layer
         architecture.append(torch.nn.Linear(hidden_layers[-1],self.output_size))
         architecture.append(torch.nn.Sigmoid()) # constrain output in [0,1]
-        self.architecture = torch.nn.Sequential(*architecture)
+        self.architecture = torch.nn.Sequential(*architecture).to(DEVICE)
 
         if loss_function is None:
             # L2 norm for regression
@@ -140,7 +143,7 @@ if __name__ == "__main__" :
     num_workers = 0
 
     # dataset
-    batch_size = 10
+    batch_size = 32
     dataset_path = os.getenv("DATASET_PATH")
     sessions = [str(session) for session in range(1,21)] # first 20 sessions
     images_to_load = ["Images"]
