@@ -3,6 +3,8 @@ from torchvision import transforms
 from tqdm import tqdm
 import os
 from gripper_data import GripperDataset, DataLoader
+import json
+
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -12,14 +14,19 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 class PixelGenerator(torch.nn.Module):
     def __init__(self, 
                  coordinates: tuple, 
-                 layers: list,
-                 input_dim = 5,
+                 hidden_layers: list,
+                 input_dim: int = 5,
                  activation_function = torch.nn.ReLU(),
                  loss_function = None,
                  optimizer = None,
+                 additional_name = "",
                  *args, 
                  **kwargs):
         super().__init__(*args, **kwargs)
+
+        self.model_name = "pixel_decoder_" + "_".join(map(str,coordinates)) + "_layers_" + "_".join(map(str,hidden_layers)) + additional_name
+        self.path = os.path.abspath(os.path.join(os.path.dirname(__file__),'decoder_checkpoints',f'{self.model_name}'))
+        os.makedirs(self.path, exist_ok=True)   
 
         self.coordinates = coordinates
         self.input_dim = input_dim
@@ -30,12 +37,12 @@ class PixelGenerator(torch.nn.Module):
         
         in_dim = input_dim
         # add custom fully connected layers
-        for size in layers:
+        for size in hidden_layers:
             architecture.append(torch.nn.Linear(in_dim,size))
             architecture.append(self.activation_function) # ReLU by default
             in_dim = size
         # add output layer
-        architecture.append(torch.nn.Linear(layers[-1],self.output_size))
+        architecture.append(torch.nn.Linear(hidden_layers[-1],self.output_size))
         architecture.append(torch.nn.Sigmoid()) # constrain output in [0,1]
         self.architecture = torch.nn.Sequential(*architecture)
 
@@ -49,35 +56,53 @@ class PixelGenerator(torch.nn.Module):
         prediction = self.architecture(x)
         return prediction
     
-    def train_model(self, train_loader, epochs=1, verbose=False):
-        self.train()
-
+    def train_model(self, train_loader, val_loader=None, epochs=20, verbose=False):
         train_losses = []
+        val_losses = []
 
-        for epoch in range(epochs):
-            for i, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
+        for epoch in tqdm(range(epochs), desc="Epochs"):
+            self.train()
+            running_loss = 0
+            for i, batch in tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Training epoch {epoch}"):
                 img, states = batch
                 # select target pixel -> (all batch, RGB, i, j)
                 target = img[:,:,*self.coordinates].to(DEVICE)
                 states = states.to(DEVICE)
 
+                self.optimizer.zero_grad() # reset gradients
                 prediction = self.forward(states)
                 loss = self.loss_function(prediction, target)
                 loss.backward()
                 self.optimizer.step()
 
-                if i%100==0:
-                    train_losses.append(loss.detach().numpy())
-                    if verbose:
-                        print(f"Batch iteration {i} -> train loss = {loss}")
+                running_loss += loss.detach().item()
+            # store train loss
+            train_loss = running_loss/len(train_loader)
+            if verbose:
+                print("training loss:", train_loss)
+            train_losses.append(train_loss)
+            self.save_learning_curve(train_losses, curve_name="training_losses")
+            
+            if val_loader is not None:
+                self.eval()
+                val_loss = self.evaluate(val_loader, description=f"Validation epoch {epoch}")
+                val_losses.append(val_loss)
+                # store val loss
+                self.save_learning_curve(val_losses, curve_name="validation_losses")
+                if verbose:
+                    print("validation loss", val_loss)
+
+            # checkpoint -> store model parameters for each epoch
+            torch.save(self.architecture.state_dict(), 
+                       os.path.join(self.path, f"model_epoch_{epoch}.pt"))
 
         return train_losses        
 
-    def evaluate(self, test_loader):
+    def evaluate(self, test_loader, description=""):
         self.eval()
 
         tot_loss = 0
-        for i, batch in enumerate(test_loader):
+        for i, batch in tqdm(enumerate(test_loader), total=len(test_loader), desc=description):
             img, states = batch
             # select target pixel
             target = img[:,:,*self.coordinates].to(DEVICE)
@@ -87,9 +112,22 @@ class PixelGenerator(torch.nn.Module):
                 prediction = self.forward(states)
                 loss = self.loss_function(prediction, target)
                 
-            tot_loss += loss
+            tot_loss += loss.item()
 
         return tot_loss/len(test_loader)
+    
+    def save_learning_curve(self, losses, curve_name):
+        filename = os.path.join(self.path, f'{curve_name}.json')
+        with open(filename, "w") as file:
+            json.dump(losses, file)
+
+    def get_name(self):
+        return self.model_name
+    
+    def load_model(self, epoch=20):
+        checkpoint_path = os.path.join(self.path,f"model_epoch_{epoch}.pt")
+        self.architecture.load_state_dict(torch.load(checkpoint_path, 
+                                                     map_location=DEVICE))
 
     
 
@@ -122,5 +160,6 @@ if __name__ == "__main__" :
     pixel_coordinates = (100,100)
     layers = [32, 32]
     model = PixelGenerator(pixel_coordinates, layers)
-    train_losses = model.train_model(train_loader)
+    train_losses, val_losses = model.train_model(train_loader, val_loader)
     print(train_losses)
+    print(val_losses)
