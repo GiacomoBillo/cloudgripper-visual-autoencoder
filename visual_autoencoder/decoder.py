@@ -124,6 +124,9 @@ class PixelGenerator(torch.nn.Module):
     def get_name(self):
         return self.model_name
     
+    def get_architecture(self):
+        return self.architecture
+    
     def load_model(self, epoch=20):
         checkpoint_path = os.path.join(self.path,f"model_epoch_{epoch}.pt")
         self.architecture.load_state_dict(torch.load(checkpoint_path, 
@@ -160,6 +163,7 @@ if __name__ == "__main__" :
     pixel_coordinates = (100,100)
     layers = [64, 128, 128, 64]
     model = PixelGenerator(pixel_coordinates, layers)
+    print("Model architecture:", model.get_architecture())
     train_losses, val_losses = model.train_model(train_loader, val_loader)
     print(train_losses)
     print(val_losses)
