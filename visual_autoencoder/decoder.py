@@ -68,13 +68,15 @@ class PixelGenerator(torch.nn.Module):
         prediction = self.architecture(x)
         return prediction
     
-    def train_model(self, train_loader, val_loader=None, epochs=20, verbose=False):
+    def train_model(self, train_loader, val_loader=None, epochs=20, verbose=False, losses_per_batch=100):
         train_losses = []
         val_losses = []
+        train_losses_batch = []
 
         for epoch in tqdm(range(epochs), desc="Epochs"):
             self.train()
             running_loss = 0
+            running_loss_k_batch = []
             for i, batch in tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Training epoch {epoch}"):
                 img, states = batch
                 # select target pixel -> (all batch, RGB, i, j)
@@ -86,6 +88,18 @@ class PixelGenerator(torch.nn.Module):
                 loss = self.loss_function(prediction, target)
                 loss.backward()
                 self.optimizer.step()
+
+                if losses_per_batch is not None:
+                    running_loss_k_batch.append(loss.detach().item())
+                    if (i+1)%losses_per_batch == 0 or i == len(train_loader)-1:
+                        loss_k_batch = sum(running_loss_k_batch)/len(running_loss_k_batch)
+                        train_losses_batch.append(loss_k_batch)
+                        self.save_learning_curve(train_losses_batch, curve_name="training_losses_batch")
+                        running_loss_k_batch = []
+                        if verbose:
+                            print(f"training {losses_per_batch}-batch loss:", loss_k_batch)
+                            print("target", target)
+                            print("prediction", prediction) 
 
                 running_loss += loss.detach().item()
             # store train loss
@@ -108,6 +122,10 @@ class PixelGenerator(torch.nn.Module):
             torch.save(self.architecture.state_dict(), 
                        os.path.join(self.path, f"model_epoch_{epoch}.pt"))
 
+        if val_loader is not None:
+            if losses_per_batch is not None:
+                return train_losses, val_losses, train_losses_batch
+            return train_losses, val_losses
         return train_losses        
 
     def evaluate(self, test_loader, description=""):
@@ -198,7 +216,7 @@ if __name__ == "__main__" :
     print(f"Number of samples in the dataset: {len(dataset)}")
 
     # split data (train-test)
-    torch.manual_seed(11) # Set fixed random number seed for reproducibility
+    # torch.manual_seed(11) # Set fixed random number seed for reproducibility
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers) #shuffle before training
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers)
@@ -209,7 +227,8 @@ if __name__ == "__main__" :
     print("Model architecture:", model.get_architecture())
     train_losses, val_losses = model.train_model(train_loader, 
                                                  val_loader, 
-                                                 epochs=args.epochs)
+                                                 epochs=args.epochs,
+                                                 verbose=True,)
     print(train_losses)
     print(val_losses)
     plt.plot(train_losses)
