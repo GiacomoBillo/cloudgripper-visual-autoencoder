@@ -4,12 +4,21 @@ from tqdm import tqdm
 import os
 from gripper_data import GripperDataset, DataLoader
 import json
+import argparse
+import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 load_dotenv()
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", DEVICE)
 
+
+class SinActivation(torch.nn.Module):
+    def __init__(self):
+        super(SinActivation, self).__init__()
+
+    def forward(self, x):
+        return torch.sin(x)
 
 """
 5D configuration of the robot -> 1 RGB pixel prediction
@@ -137,13 +146,44 @@ class PixelGenerator(torch.nn.Module):
 
     
 
+def parse_arguments(verbose=False):
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--batch_size", type=int, default=os.getenv("BATCH_SIZE"))
+    parser.add_argument("--pixel", type=list, 
+                        default=[int(x.strip()) for x in os.getenv("PIXEL_COORDINATES").split(",")])
+    parser.add_argument("--hidden_layers", type=list, 
+                        default=[int(x.strip()) for x in os.getenv("HIDDEN_LAYERS").split(",")])
+    parser.add_argument("--activation", type=str, default=os.getenv("ACTIVATION_FUNCTION"))
+    parser.add_argument("--epochs", type=int, default=10)
+    args=parser.parse_args()
+
+    if verbose:
+        # print arguments
+        print("Arguments:")
+        print("batch_size:", args.batch_size)
+        print("pixel_coordinates:", args.pixel, type(args.pixel))
+        print("hidden_layers:", args.hidden_layers, type(args.hidden_layers))
+        print("activation_function:", args.activation)
+        print("epochs:", args.epochs)
+    return args
+
 if __name__ == "__main__" :
+    args = parse_arguments()
+    activation_function_map = {
+        "relu": torch.nn.ReLU(),
+        "leakyrelu": torch.nn.LeakyReLU(),
+        "tanh": torch.nn.Tanh(),
+        "sigmoid": torch.nn.Sigmoid(),
+        "sin": SinActivation()
+    }
+    activation_function = activation_function_map.get(args.activation, torch.nn.ReLU())
+
     # train, val, test split
     split = [0.8, 0.1, 0.1] 
     num_workers = 0
 
     # dataset
-    batch_size = 32
+    batch_size = args.batch_size
     dataset_path = os.getenv("DATASET_PATH")
     sessions = [str(session) for session in range(1,21)] # first 20 sessions
     images_to_load = ["Images"]
@@ -163,10 +203,15 @@ if __name__ == "__main__" :
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers) #shuffle before training
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers)
 
-    pixel_coordinates = (100,100)
-    layers = [64, 128, 128, 64]
-    model = PixelGenerator(pixel_coordinates, layers)
+    pixel_coordinates = args.pixel
+    layers = args.hidden_layers
+    model = PixelGenerator(pixel_coordinates, layers, activation_function=activation_function)
     print("Model architecture:", model.get_architecture())
-    train_losses, val_losses = model.train_model(train_loader, val_loader)
+    train_losses, val_losses = model.train_model(train_loader, 
+                                                 val_loader, 
+                                                 epochs=args.epochs)
     print(train_losses)
     print(val_losses)
+    plt.plot(train_losses)
+    plt.plot(val_losses)
+    plt.show()
