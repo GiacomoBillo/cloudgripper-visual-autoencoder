@@ -199,6 +199,23 @@ def transpose_channels_first(img):
         img = np.transpose(img, (2, 0, 1))
     return img
 
+
+def plot_image(image,
+               title=None,
+               ax=None,
+               fontsize=16
+               ):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    image = transpose_channels_last(image)
+    image = np.clip(image, 0, 1)
+    
+    ax.imshow(image)
+    ax.axis('off')
+    if title is not None:
+        ax.set_title(title, fontsize=fontsize)  
+    
 def plot_images(bottom_img, top_img, title=None):
     # move RGB channels to the last dimension
     bottom_img = transpose_channels_last(bottom_img)
