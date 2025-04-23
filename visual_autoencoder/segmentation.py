@@ -5,6 +5,8 @@ import re
 from gripper_data import GripperDataset, store_image
 from tqdm import tqdm
 from torchvision import transforms
+from background_subtraction import morphological_refinement, filter_small_components_reverse, get_segmentation_mask, filter_small_components, create_mask_image, unite_masks
+
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -17,7 +19,7 @@ class MaskEngine():
         self.environment = environment
 
 
-    def create_mask(self, img):
+    def create_mask(self, img, post_process=True):
         epsilon = 1e-8
         threshold = 1
 
@@ -35,6 +37,25 @@ class MaskEngine():
         mask = torch.sum(subtraction, dim=sum_dim, keepdim=True)
         # threshold mask
         mask = (mask > threshold)
+
+        # post processing to clean the mask
+        if post_process:
+            if len(img.shape) == 3: # single image
+                mask = self.post_process_mask(mask.squeeze())
+            else: # batch
+                for i in range(mask.shape[0]):
+                    mask[i] = self.post_process_mask(mask[i].squeeze())
+            
+        return mask
+    
+
+    def post_process_mask(self, mask):
+        # mask = morphological_refinement(mask.squeeze(0))
+        mask = filter_small_components_reverse(mask.squeeze())
+
+        segmentation_masks = get_segmentation_mask(mask)
+        mask = segmentation_masks[0] # select biggest mask component
+
         return mask
     
 
@@ -49,12 +70,12 @@ generate and save masks and masked images
 if __name__ == "__main__":
     # dataset (access using either experiment or path)
     experiment = "data_collection_clean_env" # add the name of the dataset experiment HERE
-    # path = # add the path of the dataset HERE
-    sessions = [str(session) for session in range(1,21)] # first 20 sessions
+    path = os.getenv("DATASET_PATH") # add the path of the dataset HERE
+    sessions = [str(session) for session in range(1,2)] # first 20 sessions
 
     # load mean image
     transform = transforms.ToTensor()
-    env_img_path_top = os.path.join("visual_autoencoder", "clean_environment_images", "top_mean_Experiment_data_collection_clean_env.jpeg")
+    env_img_path_top = os.path.join("visual_autoencoder", "clean_environment_images", "top_mean.jpeg")
     if os.path.exists(env_img_path_top):
         environment_img_top = transform(cv2.imread(env_img_path_top))
     else:
@@ -68,29 +89,28 @@ if __name__ == "__main__":
     for session in sessions:
         session_path = os.path.join(path, str(session), "task")
 
-        dataset = GripperDataset(experiment=experiment, sessions=[session])
-        # dataset = GripperDataset(abs_path=path, sessions=[session])
+        # dataset = GripperDataset(experiment=experiment, sessions=[session])
+        dataset = GripperDataset(abs_path=path, sessions=[session], 
+                                 images_to_load=["Images"])
 
         for index in tqdm(range(len(dataset)), desc=f"Samples session {session}"):
-            bottom_image, top_image, state = dataset[index]
+            image, state = dataset[index]
 
-            filename = dataset.top_images[index] # path/name_number.jpeg
+            filename = dataset.images["Images"][index] # path/name_number.jpeg
             match = re.search(r'(\d+)', filename[::-1])
             # if match:
             number = match.group(1)[::-1]
 
             # top
-            top_mask = mask_engine_top.create_mask(top_image)
-            top_masked_image = mask_engine_top.apply_mask(top_image, top_mask)
-            # print(top_mask.shape, top_mask.dtype)
-            # print(top_masked_image.shape, top_masked_image.dtype)
-
-            # bottom
-            # bottom_mask = mask_engine_bottom.create_mask(bottom_image)
-            # bottom_masked_image = mask_engine_bottom.apply_mask(bottom_image,bottom_mask)
+            mask = mask_engine_top.create_mask(image)
+            masked_image = mask_engine_top.apply_mask(image, mask)
+            # print(mask.shape, mask.dtype)
+            # print(masked_image.shape, masked_image.dtype)
 
             # save
-            store_image(top_mask, os.path.join(session_path,"Top_masks", f"top_mask_{number}.jpeg"))
-            store_image(top_masked_image, os.path.join(session_path,"Top_masked_images", f"top_masked_image_{number}.jpeg"))
-            # store_image(bottom_mask, os.path.join(session_path,"Bottom_masks",f"bottom_mask_{number}.jpeg"))
-            # store_image(bottom_masked_image, os.path.join(session_path,"Bottom_masked_images",f"bottom_masked_image_{number}.jpeg"))
+            store_image(mask.squeeze(), os.path.join(session_path,
+                                                     "Top_masks_processed", 
+                                                     f"top_mask_{number}.jpeg"))
+            store_image(masked_image, os.path.join(session_path,
+                                                   "Top_masked_images_processed", 
+                                                   f"top_masked_image_{number}.jpeg"))
