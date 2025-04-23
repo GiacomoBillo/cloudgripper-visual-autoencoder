@@ -217,6 +217,50 @@ def plot_images(bottom_img, top_img, title=None):
         ax.set_title(title, fontsize=18)  
     plt.show()
 
+def plot_image(image, title=None, ax=None, fontsize=14, cmap=None):
+    image = image.squeeze()
+
+    if len(image.shape) == 2:
+        cmap = 'gray'
+    else:
+        # move RGB channels to the last dimension
+        image = transpose_channels_last(image)
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    ax.imshow(image, cmap=cmap)
+    ax.axis('off')
+    if title is not None:
+        ax.set_title(title, fontsize=fontsize)  
+    plt.show()
+
+
+def compute_mean_image(dataset: GripperDataset, name=None):
+    """
+    Args:
+        dataset (GripperDataset)
+    
+    Returns:
+        mean_image (np.array): mean of images
+    """
+    sum_image = None
+
+    for index in tqdm(range(len(dataset))):
+        image, states = dataset[index]
+
+        if sum_image is None:
+            sum_image = image.numpy()
+        else:
+            sum_image += image.numpy()
+        
+    mean_image = sum_image / len(dataset)
+    mean_image = mean_image.squeeze()
+
+    if name is not None:
+        # store image
+        print(f"Storing mean image {name}")
+        store_image(mean_image, name)
+    return mean_image
 
 def compute_mean_images(dataloader: DataLoader, path="", name=""):
     """
@@ -268,16 +312,12 @@ def store_image(img, path):
     if isinstance(img, torch.Tensor):
         img = img.numpy()
     img = img.squeeze()
+    img = (img * 255).astype(np.uint8)
 
-    # 2D image
-    if len(img.shape) == 2:
-        return cv2.imwrite(path, img.astype(np.uint8)*255)
-
-    # 3D image
-    img = transpose_channels_last(img)
-    if img.dtype == np.float32:
-        img = (img * 255).astype(np.uint8)
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)    
+    # RGB image
+    if len(img.shape) == 3:
+        img = transpose_channels_last(img)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)    
     return cv2.imwrite(path, img)
     
 
