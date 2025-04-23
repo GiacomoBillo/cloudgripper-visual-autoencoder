@@ -164,7 +164,7 @@ def load_image(image_path):
     if len(img.shape) == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    return img
+    return img.squeeze()
 
 
 def concatenate_images(bottom_img, top_img, space=15):
