@@ -156,10 +156,13 @@ def load_image(image_path):
         img: image as numpy array in RGB format (Channels, Height, Width)
     """
 
-    img = cv2.imread(image_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+    
     if img is None:
         raise Exception(f"Image {image_path} not found")
+    
+    if len(img.shape) == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     return img
 
@@ -276,21 +279,22 @@ def store_image(img, path):
     Returns
         True if saved successfully
     """
+    dir = os.path.dirname(path)
+    os.makedirs(dir, exist_ok=True)
+
     if isinstance(img, torch.Tensor):
         img = img.numpy()
+    img = img.squeeze()
+
+    # 2D image
+    if len(img.shape) == 2:
+        return cv2.imwrite(path, img.astype(np.uint8)*255)
+
+    # 3D image
     img = transpose_channels_last(img)
     if img.dtype == np.float32:
         img = (img * 255).astype(np.uint8)
-    elif img.dtype == bool: # mask
-        img = img.astype(np.uint8) * 255
-    # if img.shape[2] == 1: # 2D image
-    #     img = img.squeeze(-1)
-        # img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        # img = np.repeat(img, 3, axis=2)
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    dir = os.path.dirname(path)
-    os.makedirs(dir, exist_ok=True)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)    
     return cv2.imwrite(path, img)
     
 
