@@ -7,8 +7,9 @@ from tqdm import tqdm
 from torchvision import transforms
 from background_subtraction import morphological_refinement, filter_small_components_reverse, get_segmentation_mask, filter_small_components, create_mask_image, unite_masks
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
 
-
+load_dotenv()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -96,8 +97,9 @@ if __name__ == "__main__":
     # dataset (access using either experiment or path)
     experiment = "data_collection_clean_env" # add the name of the dataset experiment HERE
     path = os.getenv("DATASET_PATH") # add the path of the dataset HERE
+    print("Dataset path", path)
     sessions = [str(session) for session in range(1,2)] # first 20 sessions
-    sessions = [str(3)]
+    sessions = [str(11), str(12)]
 
     # load mean image
     transform = transforms.ToTensor()
@@ -118,7 +120,7 @@ if __name__ == "__main__":
         dataset = GripperDataset(abs_path=path, sessions=[session], 
                                  images_to_load=["Images"])
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(process_sample, session_path, dataset, mask_engine_top, index) for index in range(len(dataset))]
             for _ in tqdm(as_completed(futures), total=len(futures), desc=f"Samples session {session}"):
                 pass
