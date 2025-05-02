@@ -133,6 +133,12 @@ class PCAEncoder(torch.nn.Module):
             json.dump(losses, file)
 
 
+    def load_model(self):
+        self.architecture.load_state_dict(
+            torch.load(os.path.join(self.model_path, "model.pth"), 
+            map_location=DEVICE))
+
+
 
 if __name__ == "__main__":
     # data
