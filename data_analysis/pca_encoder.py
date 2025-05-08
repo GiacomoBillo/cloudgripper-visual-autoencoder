@@ -20,8 +20,8 @@ VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
     "input_dim": 1000,
-    "layers": [128, 32, 16, 1],
-    "dropout": 0.2,
+    "layers": [128, 32, 8, 1],
+    "dropout": 0,
     "batch_norm": True,
     "activation": "relu",
     "optimizer": "adamW",
@@ -151,7 +151,8 @@ class PCAEncoder(torch.nn.Module):
                     epochs=HYPERPARAMETERS["epochs"], 
                     lr=HYPERPARAMETERS["learning_rate"],
                     weight_decay=HYPERPARAMETERS["weight_decay"],
-                    verbose=VERBOSE
+                    verbose=VERBOSE,
+                    patience=10,
                     ):
         self.normalizer = normalize_principal_components(pca = self.pca, 
                                                          train_loader = train_loader, 
@@ -170,6 +171,8 @@ class PCAEncoder(torch.nn.Module):
 
         train_losses = []
         val_losses = []
+        count_patience = 0
+        best_val_loss = float("inf")
         for epoch in tqdm(range(epochs), 
                           desc="Training", 
                           unit="epoch",
@@ -239,6 +242,18 @@ class PCAEncoder(torch.nn.Module):
                     self.writer.add_scalar("Loss/val", val_loss, epoch)
                     val_losses.append(val_loss)
                     self.save_learning_curve(val_losses, "val")
+
+                    # early stopping
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        count_patience = 0
+                    else:
+                        count_patience += 1
+                        if count_patience >= patience:
+                            self.writer.add_text("Early stopping", f"Early stopping at epoch {epoch + 1}")
+                            if verbose:
+                                print(f"Early stopping at epoch {epoch + 1}")
+                            break
                 self.writer.add_scalars("Learning_Curves", {"train": train_loss, "val": val_loss}, epoch)
 
             # checkpoint
@@ -284,11 +299,11 @@ if __name__ == "__main__":
                              sessions=sessions, 
                              transform=preprocess,
                              images_to_load=["Top_masks_processed"])
-    # split = [0.9, 0.1] # train, val
-    # train_dataset, val_dataset = torch.utils.data.random_split(dataset, split)
-    split = [0.8, 0.1, 0.1] # train, val, test
     torch.manual_seed(666) # for reproducibility
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
+    split = [0.9, 0.1] # train, val
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, split)
+    # split = [0.8, 0.1, 0.1] # train, val, test
+    # train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
     train_loader = DataLoader(train_dataset, 
                             batch_size=batch_size, 
                             shuffle=True)
