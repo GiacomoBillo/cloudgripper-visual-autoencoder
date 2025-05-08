@@ -1,8 +1,7 @@
 import torch
 import os
-from gripper_data import load_image, compute_mean_image, GripperDataset
+from gripper_data import GripperDataset
 from sklearn.decomposition import PCA
-import PIL
 import pickle
 import numpy as np
 from torchvision import transforms
@@ -11,16 +10,17 @@ from tqdm import tqdm
 import json
 from dotenv import load_dotenv
 from torch.utils.tensorboard import SummaryWriter
+from fc_model import normalize_principal_components
 
 load_dotenv()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-MODEL_NAME = "debug" #None
+MODEL_NAME = None
 VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
     "input_dim": 1000,
-    "layers": [128, 64, 32, 3],
+    "layers": [128, 32, 16, 1],
     "dropout": 0.2,
     "batch_norm": True,
     "activation": "relu",
@@ -60,7 +60,7 @@ class PCAEncoder(torch.nn.Module):
             self.model_name = model_name
         else:
             self.model_name = create_name(HYPERPARAMETERS)
-        self.model_path = os.path.join(os.path.dirname(__file__), "pca_models")
+        self.model_path = os.path.join(os.path.dirname(__file__), "pca_encoder", self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
         
         # hyperparameters
@@ -73,9 +73,14 @@ class PCAEncoder(torch.nn.Module):
         self.batch_norm = hyperparameters["batch_norm"]
         self.weight_decay = hyperparameters["weight_decay"]
 
+        self.batch_norm_input = torch.nn.BatchNorm1d(self.input_dim)
+        self.batch_norm_input.to(DEVICE)
+
         previous_size = self.input_dim
         layers = []
         for i, layer_size in enumerate(self.layers):
+            # if i == 0: # to normalize the input
+            #     layers.append(torch.nn.BatchNorm1d(self.input_dim))
             layers.append(torch.nn.Linear(previous_size, layer_size))
             if i != len(self.layers) - 1: # linear activation for the last layer
                 if self.batch_norm:
@@ -140,14 +145,18 @@ class PCAEncoder(torch.nn.Module):
         return self.architecture(x)
     
 
-    def train(self, 
-              train_loader: DataLoader, 
-              val_loader: DataLoader = None, 
-              epochs=HYPERPARAMETERS["epochs"], 
-              lr=HYPERPARAMETERS["learning_rate"],
-              weight_decay=HYPERPARAMETERS["weight_decay"],
-              verbose=VERBOSE
-              ):
+    def train_model(self, 
+                    train_loader: DataLoader, 
+                    val_loader: DataLoader = None, 
+                    epochs=HYPERPARAMETERS["epochs"], 
+                    lr=HYPERPARAMETERS["learning_rate"],
+                    weight_decay=HYPERPARAMETERS["weight_decay"],
+                    verbose=VERBOSE
+                    ):
+        self.normalizer = normalize_principal_components(pca = self.pca, 
+                                                         train_loader = train_loader, 
+                                                         num_components = self.input_dim)
+
         # optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
         criterion = torch.nn.MSELoss()
@@ -179,12 +188,16 @@ class PCAEncoder(torch.nn.Module):
                 # print("max:", images.max(), self.mean.max(), self.eigenvectors.max())
 
                 # pca_projections = images @ self.eigenvectors.T
-                pca_projections = self.pca.transform(images)[:,:self.input_dim]
-                pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+                pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
+                # pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
                 # print(f"Shape: {pca_projections.shape}, {labels.shape}")
+
+                norm_pca_projections = self.normalizer.transform(pca_projections)
+                norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+                # pca_projections = self.batch_norm_input(pca_projections)
                 
                 optimizer.zero_grad()
-                outputs = self(pca_projections)
+                outputs = self(norm_pca_projections)
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
@@ -195,6 +208,7 @@ class PCAEncoder(torch.nn.Module):
                 print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
                 print(f"Outputs: {outputs[0].detach().cpu().numpy()}, "
                     f"Labels: {labels[0].detach().cpu().numpy()}")
+                # print(f"Projections: {norm_pca_projections[0][:10].detach().cpu().numpy()}")
             self.writer.add_scalar("Loss/train", train_loss, epoch)
             train_losses.append(train_loss)
             self.save_learning_curve(train_losses, "train")
@@ -210,9 +224,13 @@ class PCAEncoder(torch.nn.Module):
                         labels = labels[:,:self.output_dim].to(DEVICE)
 
                         # pca_projections = images @ self.eigenvectors.T
-                        pca_projections = self.pca.transform(images)[:,:self.input_dim]
-                        pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
-                        outputs = self(pca_projections)
+                        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
+                        # pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+                        # pca_projections = self.batch_norm_input(pca_projections)
+                        norm_pca_projections = self.normalizer.transform(pca_projections)
+                        norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+                
+                        outputs = self(norm_pca_projections)
                         loss = criterion(outputs, labels)
                         running_loss += loss.item()
                     val_loss = np.sqrt(running_loss / len(val_loader))
@@ -284,5 +302,5 @@ if __name__ == "__main__":
     print(model.architecture)
 
     print("Training model...")
-    model.train(train_loader, val_loader, verbose=VERBOSE)
+    model.train_model(train_loader, val_loader, verbose=VERBOSE)
     print("Training complete")
