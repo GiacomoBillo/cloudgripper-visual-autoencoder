@@ -10,7 +10,7 @@ from tqdm import tqdm
 import json
 from dotenv import load_dotenv
 from torch.utils.tensorboard import SummaryWriter
-from fc_model import normalize_principal_components
+# from fc_model import normalize_principal_components
 
 load_dotenv()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -19,14 +19,17 @@ MODEL_NAME = None
 VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
-    "input_dim": 1000,
-    "layers": [128, 32, 8, 1],
-    "dropout": 0,
-    "batch_norm": True,
+    "input_dim": 300,
+    "layers": [128,64,32,3],
+    "dropout": 0.3,
+    "input_norm": "False", # "False", "Sample-wise", "MinMax"
+    "normalization": "LayerNorm", # "BatchNorm", "LayerNorm", False
+    # Batch Normalization -> normalization across features
+    # Layer Normalization -> normalization across samples
     "activation": "relu",
     "optimizer": "adamW",
-    "learning_rate": 0.0005,
-    "weight_decay": 1e-2,
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
     "batch_size": 128, # 32, 64, 128
     "epochs": 100,
 }
@@ -36,6 +39,8 @@ def create_name(hyperparameters):
     for layer in hyperparameters["layers"]:
         name += f"_{layer}"
     name += f"_lr{hyperparameters['learning_rate']}_bs{hyperparameters['batch_size']}"
+    if hyperparameters["normalization"] == "BatchNorm" or hyperparameters["normalization"] == "LayerNorm":
+        name += f"_{hyperparameters['normalization']}"
     if hyperparameters["dropout"] > 0:
         name += f"_dropout{hyperparameters['dropout']}"
     if hyperparameters["activation"] != "relu":
@@ -59,7 +64,7 @@ class PCAEncoder(torch.nn.Module):
         if model_name is not None:
             self.model_name = model_name
         else:
-            self.model_name = create_name(HYPERPARAMETERS)
+            self.model_name = create_name(hyperparameters)
         self.model_path = os.path.join(os.path.dirname(__file__), "pca_encoder", self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
         
@@ -70,24 +75,32 @@ class PCAEncoder(torch.nn.Module):
         self.lr = hyperparameters["learning_rate"]
         self.batch_size = hyperparameters["batch_size"]
         self.dropout = hyperparameters["dropout"]
-        self.batch_norm = hyperparameters["batch_norm"]
+        self.normalization = hyperparameters["normalization"]
         self.weight_decay = hyperparameters["weight_decay"]
+        self.input_norm = hyperparameters["input_norm"]
 
-        self.batch_norm_input = torch.nn.BatchNorm1d(self.input_dim)
-        self.batch_norm_input.to(DEVICE)
+        # self.batch_norm_input = torch.nn.BatchNorm1d(self.input_dim)
+        # self.batch_norm_input.to(DEVICE)
 
         previous_size = self.input_dim
         layers = []
         for i, layer_size in enumerate(self.layers):
-            # if i == 0: # to normalize the input
-            #     layers.append(torch.nn.BatchNorm1d(self.input_dim))
+            if i == 0: # to normalize the input
+                if self.normalization == "BatchNorm":
+                    layers.append(torch.nn.BatchNorm1d(self.input_dim))
+                elif self.normalization == "LayerNorm":
+                    layers.append(torch.nn.LayerNorm(self.input_dim))
             layers.append(torch.nn.Linear(previous_size, layer_size))
             if i != len(self.layers) - 1: # linear activation for the last layer
-                if self.batch_norm:
+                if self.normalization == "BatchNorm":
                     layers.append(torch.nn.BatchNorm1d(layer_size))
+                elif self.normalization == "LayerNorm":
+                    layers.append(torch.nn.LayerNorm(layer_size))
                 layers.append(torch.nn.ReLU())
                 if self.dropout > 0:
                     layers.append(torch.nn.Dropout(self.dropout))
+            else:
+                layers.append(torch.nn.Sigmoid())
             previous_size = layer_size
         self.architecture = torch.nn.Sequential(*layers)
         self.architecture.to(DEVICE)
@@ -135,32 +148,118 @@ class PCAEncoder(torch.nn.Module):
             print(f"Learning rate: {self.lr}")
             print(f"Batch size: {self.batch_size}")
             print(f"Dropout: {self.dropout}")
-            print(f"Batch norm: {self.batch_norm}")
+            print(f"Batch norm: {self.normalization}")
             print(f"Weight decay: {self.weight_decay}")
 
             print(f"\nModel architecture: {self.architecture}")
+            total_params = sum(p.numel() for p in self.parameters())
+            print("Number of parameters:", total_params)
+            print()
 
 
     def forward(self, x):
         return self.architecture(x)
     
 
+    def train_step(self, batch):
+        images, labels = batch
+        images = images.to(DEVICE)
+        labels = labels[:,:self.output_dim].to(DEVICE)
+        # print(f"Shape: {images.shape}, {self.mean.shape}, {self.eigenvectors.shape}")
+        # print(f"Type: {images.dtype}, {self.mean.dtype}, {self.eigenvectors.dtype}")
+        # print("min:", images.min(), self.mean.min(), self.eigenvectors.min())
+        # print("max:", images.max(), self.mean.max(), self.eigenvectors.max())
+
+        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
+        # print(f"Shape: {pca_projections.shape}, {labels.shape}")
+
+        if self.input_norm == "False":
+            norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+        
+        else: 
+
+            # standard normalization (mean, var) each component
+            # norm_pca_projections = self.normalizer.transform(pca_projections)
+            # pca_projections = self.batch_norm_input(pca_projections)
+
+            if self.input_norm == "Sample-wise":
+                # normalization sample-wise
+                norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+
+            elif self.input_norm == "MinMax":
+                min = np.min(pca_projections)
+                max = np.max(pca_projections)
+                # print(min, max)
+                norm_pca_projections = (pca_projections - min) / (max - min)
+                norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
+                # print(norm_pca_projections)
+            norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+
+        self.optimizer.zero_grad()
+        outputs = self(norm_pca_projections)
+        loss = self.criterion(outputs, labels)
+        loss.backward()
+        self.optimizer.step()
+        
+        return loss.item()
+
+
+    def validation_step(self, batch):
+        images, labels = batch
+        images = images.to(DEVICE)
+        labels = labels[:,:self.output_dim].to(DEVICE)
+
+        # pca_projections = images @ self.eigenvectors.T
+        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
+
+        if self.input_norm == "False":
+            norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+
+        else:
+            # standard normalization (mean, var) each component
+            # norm_pca_projections = self.normalizer.transform(pca_projections)
+            # pca_projections = self.batch_norm_input(pca_projections)
+
+            if self.input_norm == "Sample-wise":
+                # normalization sample-wise
+                norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+
+            elif self.input_norm == "MinMax":
+                min = np.min(pca_projections)
+                max = np.max(pca_projections)
+                # print(min, max)
+                norm_pca_projections = (pca_projections - min) / (max - min)
+                norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
+                # print(norm_pca_projections)
+            norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+
+        outputs = self(norm_pca_projections)
+        loss = self.criterion(outputs, labels)
+
+        return loss.item()
+
+
     def train_model(self, 
                     train_loader: DataLoader, 
                     val_loader: DataLoader = None, 
                     epochs=HYPERPARAMETERS["epochs"], 
-                    lr=HYPERPARAMETERS["learning_rate"],
-                    weight_decay=HYPERPARAMETERS["weight_decay"],
-                    verbose=VERBOSE,
+                    lr=None,
+                    weight_decay=None,
+                    verbose=False,
                     patience=10,
+                    loss_every_n_batches=None,
                     ):
-        self.normalizer = normalize_principal_components(pca = self.pca, 
-                                                         train_loader = train_loader, 
-                                                         num_components = self.input_dim)
+        # self.normalizer = normalize_principal_components(pca = self.pca, 
+        #                                                  train_loader = train_loader, 
+        #                                                  num_components = self.input_dim)
 
+        if lr is None:
+            lr = self.lr
+        if weight_decay is None:
+            weight_decay = self.weight_decay
         # optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
-        criterion = torch.nn.MSELoss()
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
+        self.criterion = torch.nn.MSELoss()
 
         if verbose:
             print(f"Training model {self.model_name}...")
@@ -181,38 +280,24 @@ class PCAEncoder(torch.nn.Module):
             # training
             self.architecture.train()
             running_loss = 0.0
-            for batch in train_loader:
-                images, labels = batch
-                images = images.to(DEVICE)
-                labels = labels[:,:self.output_dim].to(DEVICE)
-                # print(f"Shape: {images.shape}, {self.mean.shape}, {self.eigenvectors.shape}")
-                # print(f"Type: {images.dtype}, {self.mean.dtype}, {self.eigenvectors.dtype}")
-                # print("min:", images.min(), self.mean.min(), self.eigenvectors.min())
-                # print("max:", images.max(), self.mean.max(), self.eigenvectors.max())
-
-                # pca_projections = images @ self.eigenvectors.T
-                pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
-                # pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
-                # print(f"Shape: {pca_projections.shape}, {labels.shape}")
-
-                norm_pca_projections = self.normalizer.transform(pca_projections)
-                norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
-                # pca_projections = self.batch_norm_input(pca_projections)
-                
-                optimizer.zero_grad()
-                outputs = self(norm_pca_projections)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-
-                running_loss += loss.item()
+            for i, batch in enumerate(train_loader):
+                loss = self.train_step(batch)
+                running_loss += loss
+                # monitor batch loss
+                if loss_every_n_batches is not None and i % loss_every_n_batches == 0:
+                    train_loss = np.sqrt(running_loss / len(train_loader)) # RMSE
+                    self.writer.add_scalar("BatchLoss/train", train_loss, epoch * len(train_loader) + i)
+                    if verbose:
+                        print(f"Batch {epoch * len(train_loader) + i}, Loss: {train_loss:.4f}")
+                    break
             train_loss = np.sqrt(running_loss / len(train_loader)) # RMSE
             if verbose:
                 print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
-                print(f"Outputs: {outputs[0].detach().cpu().numpy()}, "
-                    f"Labels: {labels[0].detach().cpu().numpy()}")
+                # print(f"Outputs: {outputs[0].detach().cpu().numpy()}, "
+                #     f"Labels: {labels[0].detach().cpu().numpy()}")
                 # print(f"Projections: {norm_pca_projections[0][:10].detach().cpu().numpy()}")
-            self.writer.add_scalar("Loss/train", train_loss, epoch)
+            if loss_every_n_batches is None:
+                self.writer.add_scalar("Loss/train", train_loss, epoch)
             train_losses.append(train_loss)
             self.save_learning_curve(train_losses, "train")
 
@@ -222,20 +307,9 @@ class PCAEncoder(torch.nn.Module):
                 with torch.no_grad():
                     running_loss = 0.0
                     for batch in val_loader:
-                        images, labels = batch
-                        images = images.to(DEVICE)
-                        labels = labels[:,:self.output_dim].to(DEVICE)
-
-                        # pca_projections = images @ self.eigenvectors.T
-                        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
-                        # pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
-                        # pca_projections = self.batch_norm_input(pca_projections)
-                        norm_pca_projections = self.normalizer.transform(pca_projections)
-                        norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
-                
-                        outputs = self(norm_pca_projections)
-                        loss = criterion(outputs, labels)
-                        running_loss += loss.item()
+                        loss = self.validation_step(batch)
+                        # self.writer.add_scalar("BatchLoss/val", loss) # monitor batch loss
+                        running_loss += loss
                     val_loss = np.sqrt(running_loss / len(val_loader))
                     if verbose:
                         print(f'Validation RMSE Loss: {val_loss:.4f}')
@@ -278,9 +352,9 @@ class PCAEncoder(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    print("Hyperparameters:")
-    for key, value in HYPERPARAMETERS.items():
-        print(f"{key}: {value}")
+    # print("Hyperparameters:")
+    # for key, value in HYPERPARAMETERS.items():
+    #     print(f"{key}: {value}")
     # data
     top_img_shape = np.array([720, 1280])
     resize_factor = 4
@@ -311,10 +385,7 @@ if __name__ == "__main__":
                             batch_size=batch_size)
 
     # model
-    model = PCAEncoder(model_name=MODEL_NAME, verbose=False)
-
-    print("\nModel architecture:")
-    print(model.architecture)
+    model = PCAEncoder(model_name=MODEL_NAME, verbose=VERBOSE)
 
     print("Training model...")
     model.train_model(train_loader, val_loader, verbose=VERBOSE)
