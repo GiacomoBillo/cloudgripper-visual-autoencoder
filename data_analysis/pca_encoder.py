@@ -285,19 +285,20 @@ class PCAEncoder(torch.nn.Module):
                 running_loss += loss
                 # monitor batch loss
                 if loss_every_n_batches is not None and i % loss_every_n_batches == 0:
-                    train_loss = np.sqrt(running_loss / len(train_loader)) # RMSE
-                    self.writer.add_scalar("BatchLoss/train", train_loss, epoch * len(train_loader) + i)
+                    train_loss = np.sqrt(running_loss / (i+1)) # RMSE
+                    self.writer.add_scalar("BatchLoss/train", train_loss, epoch * loss_every_n_batches)
                     if verbose:
-                        print(f"Batch {epoch * len(train_loader) + i}, Loss: {train_loss:.4f}")
+                        print(f"\nBatch {epoch * loss_every_n_batches}, Loss: {train_loss:.4f}")
                     break
             train_loss = np.sqrt(running_loss / len(train_loader)) # RMSE
-            if verbose:
-                print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
+            
                 # print(f"Outputs: {outputs[0].detach().cpu().numpy()}, "
                 #     f"Labels: {labels[0].detach().cpu().numpy()}")
                 # print(f"Projections: {norm_pca_projections[0][:10].detach().cpu().numpy()}")
             if loss_every_n_batches is None:
                 self.writer.add_scalar("Loss/train", train_loss, epoch)
+                if verbose:
+                    print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
             train_losses.append(train_loss)
             self.save_learning_curve(train_losses, "train")
 
