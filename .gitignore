@@ -33,3 +33,5 @@ data backups/successful2 copy
 data backups
 
 data_analysis/pca_models
+data_analysis/pca_decoder
+data_analysis/pca_encoder
