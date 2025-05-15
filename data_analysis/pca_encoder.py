@@ -12,26 +12,29 @@ from dotenv import load_dotenv
 from torch.utils.tensorboard import SummaryWriter
 # from fc_model import normalize_principal_components
 import torch.nn.utils.prune as prune
+from accelerate import Accelerator # for multigpu
 
 load_dotenv()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+accelerator = Accelerator()
+DEVICE = accelerator.device
 
 MODEL_NAME = None
 VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
-    "input_dim": 200,
-    "layers": [32, 8, 1],
-    "dropout": 0.3,
+    "input_dim": 100,
+    "layers": [64, 16, 3],
+    "dropout": 0.2,
     "input_norm": "False", # "False", "Sample-wise", "MinMax"
     "normalization": "False", # "BatchNorm", "LayerNorm", False
     # Batch Normalization -> normalization across features
     # Layer Normalization -> normalization across samples
     "activation": "gelu",
     "optimizer": "adamW",
-    "learning_rate": 0.001,
+    "learning_rate": 0.01,
     "weight_decay": 0.01,
-    "batch_size": 32, # 32, 64, 128
+    "batch_size": 64, # 32, 64, 128
     "epochs": 100,
     "network_pruning": False, # "global", "local"
 }
@@ -179,12 +182,9 @@ class PCAEncoder(torch.nn.Module):
 
     def train_step(self, batch):
         images, labels = batch
-        images = images.to(DEVICE)
-        labels = labels[:,:self.output_dim].to(DEVICE)
-        # print(f"Shape: {images.shape}, {self.mean.shape}, {self.eigenvectors.shape}")
-        # print(f"Type: {images.dtype}, {self.mean.dtype}, {self.eigenvectors.dtype}")
-        # print("min:", images.min(), self.mean.min(), self.eigenvectors.min())
-        # print("max:", images.max(), self.mean.max(), self.eigenvectors.max())
+        # images = images.to(DEVICE)
+        # labels = labels[:,:self.output_dim].to(DEVICE)
+        labels = labels[:,:self.output_dim]
 
         pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
         # print(f"Shape: {pca_projections.shape}, {labels.shape}")
@@ -215,7 +215,8 @@ class PCAEncoder(torch.nn.Module):
         self.optimizer.zero_grad()
         outputs = self(norm_pca_projections)
         loss = self.criterion(outputs, labels)
-        loss.backward()
+        accelerator.backward(loss) # for multigpu
+        # loss.backward()
         self.optimizer.step()
         
         return loss.item()
@@ -223,8 +224,9 @@ class PCAEncoder(torch.nn.Module):
 
     def validation_step(self, batch):
         images, labels = batch
-        images = images.to(DEVICE)
-        labels = labels[:,:self.output_dim].to(DEVICE)
+        # images = images.to(DEVICE)
+        # labels = labels[:,:self.output_dim].to(DEVICE)
+        labels = labels[:,:self.output_dim]
 
         # pca_projections = images @ self.eigenvectors.T
         pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
@@ -278,6 +280,11 @@ class PCAEncoder(torch.nn.Module):
         # optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
         self.criterion = torch.nn.MSELoss()
+
+        self.architecture, train_loader, val_loader, self.optimizer = accelerator.prepare(self.architecture, 
+                                                             train_loader, 
+                                                             val_loader,
+                                                             self.optimizer)
 
         if verbose:
             print(f"Training model {self.model_name}...")
