@@ -11,6 +11,7 @@ import json
 from dotenv import load_dotenv
 from torch.utils.tensorboard import SummaryWriter
 # from fc_model import normalize_principal_components
+import torch.nn.utils.prune as prune
 
 load_dotenv()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -19,19 +20,20 @@ MODEL_NAME = None
 VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
-    "input_dim": 300,
-    "layers": [128,64,32,3],
+    "input_dim": 200,
+    "layers": [32, 8, 1],
     "dropout": 0.3,
     "input_norm": "False", # "False", "Sample-wise", "MinMax"
-    "normalization": "LayerNorm", # "BatchNorm", "LayerNorm", False
+    "normalization": "False", # "BatchNorm", "LayerNorm", False
     # Batch Normalization -> normalization across features
     # Layer Normalization -> normalization across samples
-    "activation": "relu",
+    "activation": "gelu",
     "optimizer": "adamW",
     "learning_rate": 0.001,
     "weight_decay": 0.01,
-    "batch_size": 128, # 32, 64, 128
+    "batch_size": 32, # 32, 64, 128
     "epochs": 100,
+    "network_pruning": False, # "global", "local"
 }
 
 def create_name(hyperparameters):
@@ -49,6 +51,8 @@ def create_name(hyperparameters):
         name += f"_{hyperparameters['optimizer']}"
     if hyperparameters["weight_decay"] > 0:
         name += f"_wd{hyperparameters['weight_decay']}"
+    if hyperparameters["network_pruning"]:
+        name += f"_pruning_{hyperparameters['network_pruning']}"
     return name
 
 
@@ -78,6 +82,8 @@ class PCAEncoder(torch.nn.Module):
         self.normalization = hyperparameters["normalization"]
         self.weight_decay = hyperparameters["weight_decay"]
         self.input_norm = hyperparameters["input_norm"]
+        self.activation = hyperparameters["activation"]
+        self.network_pruning = hyperparameters["network_pruning"]
 
         # self.batch_norm_input = torch.nn.BatchNorm1d(self.input_dim)
         # self.batch_norm_input.to(DEVICE)
@@ -91,12 +97,22 @@ class PCAEncoder(torch.nn.Module):
                 elif self.normalization == "LayerNorm":
                     layers.append(torch.nn.LayerNorm(self.input_dim))
             layers.append(torch.nn.Linear(previous_size, layer_size))
-            if i != len(self.layers) - 1: # linear activation for the last layer
+            if i != len(self.layers) - 1: # for the hidden layer
+                # normalization
                 if self.normalization == "BatchNorm":
                     layers.append(torch.nn.BatchNorm1d(layer_size))
                 elif self.normalization == "LayerNorm":
                     layers.append(torch.nn.LayerNorm(layer_size))
-                layers.append(torch.nn.ReLU())
+
+                # activation for hidden layers
+                if self.activation == "relu":
+                    layers.append(torch.nn.ReLU())
+                elif self.activation == "gelu":
+                    layers.append(torch.nn.GELU())
+                elif self.activation == "elu":
+                    layers.append(torch.nn.ELU())
+                
+                # dropout
                 if self.dropout > 0:
                     layers.append(torch.nn.Dropout(self.dropout))
             else:
@@ -174,6 +190,7 @@ class PCAEncoder(torch.nn.Module):
         # print(f"Shape: {pca_projections.shape}, {labels.shape}")
 
         if self.input_norm == "False":
+            pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
             norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
         
         else: 
@@ -213,6 +230,7 @@ class PCAEncoder(torch.nn.Module):
         pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
 
         if self.input_norm == "False":
+            pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
             norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
 
         else:
@@ -276,6 +294,37 @@ class PCAEncoder(torch.nn.Module):
                           desc="Training", 
                           unit="epoch",
                           total=epochs):
+
+            # network pruning for regularization
+            if self.network_pruning and (0<epoch<11 and epoch % 2 == 0):
+                print("\nPruning model...")
+                parameters_to_prune = []
+
+                # Global unstructured pruning
+                for module in self.architecture:
+                    if isinstance(module, torch.nn.Linear):
+                        parameters_to_prune.append((module, 'weight'))
+                        # if module.bias is not None:
+                        #     parameters_to_prune.append((module, 'bias'))
+                        if self.network_pruning == "local":
+                            prune.ln_structured(
+                                module,
+                                name='weight',
+                                amount=0.1,
+                                n=2, # L2 norm
+                                dim=0, # prune entire rows
+                            )
+                            # break
+
+                # Apply global unstructured pruning
+                if self.network_pruning == "global":
+                    prune.global_unstructured(
+                        parameters_to_prune,
+                        pruning_method=prune.L1Unstructured,
+                        amount=0.1,
+                    )
+                total_params = sum(p.numel() for p in self.parameters())
+                print("Number of parameters:", total_params)
             
             # training
             self.architecture.train()
@@ -284,7 +333,7 @@ class PCAEncoder(torch.nn.Module):
                 loss = self.train_step(batch)
                 running_loss += loss
                 # monitor batch loss
-                if loss_every_n_batches is not None and i % loss_every_n_batches == 0:
+                if loss_every_n_batches is not None and (i+1) % loss_every_n_batches == 0:
                     train_loss = np.sqrt(running_loss / (i+1)) # RMSE
                     self.writer.add_scalar("BatchLoss/train", train_loss, epoch * loss_every_n_batches)
                     if verbose:
