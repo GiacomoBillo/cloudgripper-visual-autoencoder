@@ -2,6 +2,7 @@ import torch
 import os
 from gripper_data import GripperDataset
 from sklearn.decomposition import PCA
+from logisticpca import LogisticPCA
 import pickle
 import numpy as np
 from torchvision import transforms
@@ -19,24 +20,25 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 accelerator = Accelerator()
 DEVICE = accelerator.device
 
-MODEL_NAME = None
+MODEL_NAME = "Debug" #None
 VERBOSE = True
 SESSIONS = np.arange(1, 3) # sessions to load
 HYPERPARAMETERS = { 
     "input_dim": 100,
-    "layers": [64, 16, 3],
-    "dropout": 0.2,
+    "layers": [16, 16, 1],
+    "dropout": 0,
     "input_norm": "False", # "False", "Sample-wise", "MinMax"
-    "normalization": "False", # "BatchNorm", "LayerNorm", False
+    "normalization": False, # "BatchNorm", "LayerNorm", False
     # Batch Normalization -> normalization across features
     # Layer Normalization -> normalization across samples
-    "activation": "gelu",
-    "optimizer": "adamW",
-    "learning_rate": 0.01,
-    "weight_decay": 0.01,
-    "batch_size": 64, # 32, 64, 128
+    "activation": "relu", # "relu", "gelu", "elu", "leaky_relu"
+    "optimizer": "adamW", #"SGD", # "adamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0,
+    "batch_size": 128, # 32, 64, 128
     "epochs": 100,
     "network_pruning": False, # "global", "local"
+    "from_binary": True, # if True, load logistic PCA model
 }
 
 def create_name(hyperparameters):
@@ -72,7 +74,7 @@ class PCAEncoder(torch.nn.Module):
             self.model_name = model_name
         else:
             self.model_name = create_name(hyperparameters)
-        self.model_path = os.path.join(os.path.dirname(__file__), "pca_encoder", self.model_name)
+        self.model_path = os.path.join(os.path.dirname(__file__), "logistic_pca_encoder", self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
         
         # hyperparameters
@@ -87,6 +89,7 @@ class PCAEncoder(torch.nn.Module):
         self.input_norm = hyperparameters["input_norm"]
         self.activation = hyperparameters["activation"]
         self.network_pruning = hyperparameters["network_pruning"]
+        self.from_binary = hyperparameters["from_binary"]
 
         # self.batch_norm_input = torch.nn.BatchNorm1d(self.input_dim)
         # self.batch_norm_input.to(DEVICE)
@@ -94,13 +97,15 @@ class PCAEncoder(torch.nn.Module):
         previous_size = self.input_dim
         layers = []
         for i, layer_size in enumerate(self.layers):
-            if i == 0: # to normalize the input
-                if self.normalization == "BatchNorm":
-                    layers.append(torch.nn.BatchNorm1d(self.input_dim))
-                elif self.normalization == "LayerNorm":
-                    layers.append(torch.nn.LayerNorm(self.input_dim))
+            # if i == 0: # to normalize the input
+            #     if self.normalization == "BatchNorm":
+            #         layers.append(torch.nn.BatchNorm1d(self.input_dim))
+            #     elif self.normalization == "LayerNorm":
+            #         layers.append(torch.nn.LayerNorm(self.input_dim))
+
             layers.append(torch.nn.Linear(previous_size, layer_size))
-            if i != len(self.layers) - 1: # for the hidden layer
+
+            if i != len(self.layers) - 1: # for the hidden layers
                 # normalization
                 if self.normalization == "BatchNorm":
                     layers.append(torch.nn.BatchNorm1d(layer_size))
@@ -114,6 +119,8 @@ class PCAEncoder(torch.nn.Module):
                     layers.append(torch.nn.GELU())
                 elif self.activation == "elu":
                     layers.append(torch.nn.ELU())
+                elif self.activation == "leaky_relu":
+                    layers.append(torch.nn.LeakyReLU())
                 
                 # dropout
                 if self.dropout > 0:
@@ -147,16 +154,24 @@ class PCAEncoder(torch.nn.Module):
         #                             # dtype=torch.float16).flatten()
         # else:
         #     raise FileNotFoundError(f"File {filename} not found.")
-        
-        filename = os.path.join(os.path.dirname(__file__), "pca_models",'pca_masks_1000.pkl')
-        if os.path.exists(filename):
-            # print("Loading existing PCA model")
-            with open(filename, 'rb') as f:
-                self.pca = pickle.load(f)
+
+        if self.from_binary:
+            filename = os.path.join(os.path.dirname(__file__), "logistic_pca.pt")
+            if os.path.exists(filename):
+                self.pca = LogisticPCA(n_features=57600, n_components=100)
+                self.pca.load_state_dict(torch.load(filename))
+            else:
+                raise FileNotFoundError(f"File {filename} not found.")
         else:
-            raise FileNotFoundError(f"File {filename} not found.")
-        # self.eigenvectors = torch.tensor(self.pca.components_[:200], 
-        #                                  dtype=torch.float32).to(DEVICE)
+            filename = os.path.join(os.path.dirname(__file__), "pca_models",'pca_masks_1000.pkl')
+            if os.path.exists(filename):
+                # print("Loading existing PCA model")
+                with open(filename, 'rb') as f:
+                    self.pca = pickle.load(f)
+            else:
+                raise FileNotFoundError(f"File {filename} not found.")
+            # self.eigenvectors = torch.tensor(self.pca.components_[:200], 
+            #                                  dtype=torch.float32).to(DEVICE)
 
         if verbose:
             print(f"Model name: {self.model_name}")
@@ -186,40 +201,46 @@ class PCAEncoder(torch.nn.Module):
         # labels = labels[:,:self.output_dim].to(DEVICE)
         labels = labels[:,:self.output_dim]
 
-        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
-        # print(f"Shape: {pca_projections.shape}, {labels.shape}")
+        if self.from_binary:
+            pca_projections = self.pca.transform(images)[:,:self.input_dim]
+            print("logistic pca projection", pca_projections)
+            pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
 
-        if self.input_norm == "False":
-            pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
-            norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
-        
-        else: 
+        else:
+            pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
+            # print(f"Shape: {pca_projections.shape}, {labels.shape}")
 
-            # standard normalization (mean, var) each component
-            # norm_pca_projections = self.normalizer.transform(pca_projections)
-            # pca_projections = self.batch_norm_input(pca_projections)
+            if self.input_norm == "False":
+                pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
+                pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+            
+            else: 
 
-            if self.input_norm == "Sample-wise":
-                # normalization sample-wise
-                norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+                # standard normalization (mean, var) each component
+                # norm_pca_projections = self.normalizer.transform(pca_projections)
+                # pca_projections = self.batch_norm_input(pca_projections)
 
-            elif self.input_norm == "MinMax":
-                min = np.min(pca_projections)
-                max = np.max(pca_projections)
-                # print(min, max)
-                norm_pca_projections = (pca_projections - min) / (max - min)
-                norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
-                # print(norm_pca_projections)
-            norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+                if self.input_norm == "Sample-wise":
+                    # normalization sample-wise
+                    norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+
+                elif self.input_norm == "MinMax":
+                    min = np.min(pca_projections)
+                    max = np.max(pca_projections)
+                    # print(min, max)
+                    norm_pca_projections = (pca_projections - min) / (max - min)
+                    norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
+                    # print(norm_pca_projections)
+                pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
 
         self.optimizer.zero_grad()
-        outputs = self(norm_pca_projections)
+        outputs = self(pca_projections)
         loss = self.criterion(outputs, labels)
         accelerator.backward(loss) # for multigpu
         # loss.backward()
         self.optimizer.step()
         
-        return loss.item()
+        return loss
 
 
     def validation_step(self, batch):
@@ -229,34 +250,39 @@ class PCAEncoder(torch.nn.Module):
         labels = labels[:,:self.output_dim]
 
         # pca_projections = images @ self.eigenvectors.T
-        pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
-
-        if self.input_norm == "False":
-            pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
-            norm_pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
+        if self.from_binary:
+            pca_projections = self.pca.transform(images)[:,:self.input_dim]
+            pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
 
         else:
-            # standard normalization (mean, var) each component
-            # norm_pca_projections = self.normalizer.transform(pca_projections)
-            # pca_projections = self.batch_norm_input(pca_projections)
+            pca_projections = self.pca.transform(images.cpu().numpy())[:,:self.input_dim]
 
-            if self.input_norm == "Sample-wise":
-                # normalization sample-wise
-                norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+            if self.input_norm == "False":
+                pca_projections = pca_projections / self.pca.explained_variance_ratio_[0] / 100
+                pca_projections = torch.tensor(pca_projections, device=DEVICE, dtype=torch.float32)
 
-            elif self.input_norm == "MinMax":
-                min = np.min(pca_projections)
-                max = np.max(pca_projections)
-                # print(min, max)
-                norm_pca_projections = (pca_projections - min) / (max - min)
-                norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
-                # print(norm_pca_projections)
-            norm_pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+            else:
+                # standard normalization (mean, var) each component
+                # norm_pca_projections = self.normalizer.transform(pca_projections)
+                # pca_projections = self.batch_norm_input(pca_projections)
 
-        outputs = self(norm_pca_projections)
+                if self.input_norm == "Sample-wise":
+                    # normalization sample-wise
+                    norm_pca_projections = pca_projections / np.linalg.norm(pca_projections, axis=1, keepdims=True)
+
+                elif self.input_norm == "MinMax":
+                    min = np.min(pca_projections)
+                    max = np.max(pca_projections)
+                    # print(min, max)
+                    norm_pca_projections = (pca_projections - min) / (max - min)
+                    norm_pca_projections = norm_pca_projections * 2 - 1 # scale to [-1, 1]
+                    # print(norm_pca_projections)
+                pca_projections = torch.tensor(norm_pca_projections, device=DEVICE, dtype=torch.float32)
+
+        outputs = self(pca_projections)
         loss = self.criterion(outputs, labels)
 
-        return loss.item()
+        return loss
 
 
     def train_model(self, 
@@ -277,14 +303,11 @@ class PCAEncoder(torch.nn.Module):
             lr = self.lr
         if weight_decay is None:
             weight_decay = self.weight_decay
+
+        # self.optimizer = torch.optim.SGD(self.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
         # optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
         self.criterion = torch.nn.MSELoss()
-
-        self.architecture, train_loader, val_loader, self.optimizer = accelerator.prepare(self.architecture, 
-                                                             train_loader, 
-                                                             val_loader,
-                                                             self.optimizer)
 
         if verbose:
             print(f"Training model {self.model_name}...")
@@ -293,6 +316,11 @@ class PCAEncoder(torch.nn.Module):
         if val_loader is not None:
             self.writer.add_text("Validation", f"Validation with val dataset of length {len(val_loader)} batches of size {self.batch_size}")
 
+        self.architecture, train_loader, val_loader, self.optimizer = accelerator.prepare(self.architecture, 
+                                                             train_loader, 
+                                                             val_loader,
+                                                             self.optimizer)
+        
         train_losses = []
         val_losses = []
         count_patience = 0
@@ -303,7 +331,7 @@ class PCAEncoder(torch.nn.Module):
                           total=epochs):
 
             # network pruning for regularization
-            if self.network_pruning and (0<epoch<11 and epoch % 2 == 0):
+            if accelerator.is_main_process and self.network_pruning and (0<epoch<11 and epoch % 2 == 0):
                 print("\nPruning model...")
                 parameters_to_prune = []
 
@@ -332,15 +360,17 @@ class PCAEncoder(torch.nn.Module):
                     )
                 total_params = sum(p.numel() for p in self.parameters())
                 print("Number of parameters:", total_params)
+            accelerator.wait_for_everyone() # wait for pruning to finish
             
             # training
             self.architecture.train()
             running_loss = 0.0
             for i, batch in enumerate(train_loader):
                 loss = self.train_step(batch)
+                loss = accelerator.gather(loss).mean().item()
                 running_loss += loss
                 # monitor batch loss
-                if loss_every_n_batches is not None and (i+1) % loss_every_n_batches == 0:
+                if accelerator.is_main_process and loss_every_n_batches is not None and (i+1) % loss_every_n_batches == 0:
                     train_loss = np.sqrt(running_loss / (i+1)) # RMSE
                     self.writer.add_scalar("BatchLoss/train", train_loss, epoch * loss_every_n_batches)
                     if verbose:
@@ -351,12 +381,13 @@ class PCAEncoder(torch.nn.Module):
                 # print(f"Outputs: {outputs[0].detach().cpu().numpy()}, "
                 #     f"Labels: {labels[0].detach().cpu().numpy()}")
                 # print(f"Projections: {norm_pca_projections[0][:10].detach().cpu().numpy()}")
-            if loss_every_n_batches is None:
-                self.writer.add_scalar("Loss/train", train_loss, epoch)
-                if verbose:
-                    print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
-            train_losses.append(train_loss)
-            self.save_learning_curve(train_losses, "train")
+            if accelerator.is_main_process:
+                if loss_every_n_batches is None:
+                    self.writer.add_scalar("Loss/train", train_loss, epoch)
+                    if verbose:
+                        print(f'\nEpoch [{epoch + 1}/{epochs}], RMSE Loss: {train_loss:.4f}')
+                train_losses.append(train_loss)
+                self.save_learning_curve(train_losses, "train")
 
             # validation
             if val_loader is not None:
@@ -365,31 +396,38 @@ class PCAEncoder(torch.nn.Module):
                     running_loss = 0.0
                     for batch in val_loader:
                         loss = self.validation_step(batch)
+                        loss = accelerator.gather(loss).mean().item()
                         # self.writer.add_scalar("BatchLoss/val", loss) # monitor batch loss
                         running_loss += loss
                     val_loss = np.sqrt(running_loss / len(val_loader))
-                    if verbose:
-                        print(f'Validation RMSE Loss: {val_loss:.4f}')
-                    self.writer.add_scalar("Loss/val", val_loss, epoch)
-                    val_losses.append(val_loss)
-                    self.save_learning_curve(val_losses, "val")
 
-                    # early stopping
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        count_patience = 0
-                    else:
-                        count_patience += 1
-                        if count_patience >= patience:
-                            self.writer.add_text("Early stopping", f"Early stopping at epoch {epoch + 1}")
-                            if verbose:
-                                print(f"Early stopping at epoch {epoch + 1}")
-                            break
-                self.writer.add_scalars("Learning_Curves", {"train": train_loss, "val": val_loss}, epoch)
+                    accelerator.wait_for_everyone()
+                    if accelerator.is_main_process:
+                        if verbose:
+                            print(f'Validation RMSE Loss: {val_loss:.4f}')
+                        self.writer.add_scalar("Loss/val", val_loss, epoch)
+                        val_losses.append(val_loss)
+                        self.save_learning_curve(val_losses, "val")
+
+                        # early stopping
+                        if val_loss < best_val_loss:
+                            best_val_loss = val_loss
+                            count_patience = 0
+                        else:
+                            count_patience += 1
+                            if count_patience >= patience:
+                                self.writer.add_text("Early stopping", f"Early stopping at epoch {epoch + 1}")
+                                if verbose:
+                                    print(f"Early stopping at epoch {epoch + 1}")
+                                break
+                if accelerator.is_main_process:
+                    self.writer.add_scalars("Learning_Curves", {"train": train_loss, "val": val_loss}, epoch)
 
             # checkpoint
-            torch.save(self.architecture.state_dict(), 
-                    os.path.join(self.model_path, "model.pth"))
+            accelerator.wait_for_everyone()
+            if accelerator.is_main_process:
+                torch.save(self.architecture.state_dict(), 
+                        os.path.join(self.model_path, "model.pth"))
         
         self.writer.flush()
         self.writer.close()
@@ -430,7 +468,7 @@ if __name__ == "__main__":
                              sessions=sessions, 
                              transform=preprocess,
                              images_to_load=["Top_masks_processed"])
-    torch.manual_seed(666) # for reproducibility
+    torch.manual_seed(6) # for reproducibility
     split = [0.9, 0.1] # train, val
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, split)
     # split = [0.8, 0.1, 0.1] # train, val, test
@@ -442,7 +480,7 @@ if __name__ == "__main__":
                             batch_size=batch_size)
 
     # model
-    model = PCAEncoder(model_name=MODEL_NAME, verbose=VERBOSE)
+    model = PCAEncoder(model_name=MODEL_NAME, hyperparameters=HYPERPARAMETERS, verbose=VERBOSE)
 
     print("Training model...")
     model.train_model(train_loader, val_loader, verbose=VERBOSE)
