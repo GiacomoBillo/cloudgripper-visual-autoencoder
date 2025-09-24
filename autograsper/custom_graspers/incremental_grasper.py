@@ -31,7 +31,7 @@ def on_release(key):
             return False # stop listener
 
 
-class IncrementalGrasperXZ(AutograsperBase):
+class IncrementalGrasper(AutograsperBase):
     def __init__(self, config):
         super().__init__(config)
 
