@@ -1,0 +1,18 @@
+model:
+  name: ConvolutionalEncoder
+  input_channels: 3
+  dimensions_to_learn: [0] # x
+
+training:
+  batch_size: 32
+  epochs: 100
+  validation: true
+  early_stopping: true
+  
+data:
+  dataset_path: "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\toy_dataset_xz"
+  top_img_shape: [720, 1280]
+  resize_factor: 16
+  split: [8000, 2000, 300]
+  images_to_load: ["Images"]
+
