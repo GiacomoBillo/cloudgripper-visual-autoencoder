@@ -7,12 +7,18 @@ training:
   batch_size: 32
   epochs: 100
   validation: true
-  early_stopping: true
+  early_stopping: false
   
 data:
   dataset_path: "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\toy_dataset_xz"
   top_img_shape: [720, 1280]
   resize_factor: 16
-  split: [8000, 2000, 300]
+  split: [8000, 2000, 300] # train, val, test split of the dataset
+  # num/ratio of samples to effectively use from the training set
+  # if null, use all samples
+  train_fraction_used: null
+  # num or ratio of samples to effectively use from the validation set
+  # if null, use all samples
+  val_fraction_used: null
   images_to_load: ["Images"]
 

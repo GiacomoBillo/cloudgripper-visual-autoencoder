@@ -2,7 +2,7 @@ import torch
 from torchinfo import summary
 from gripper_data import GripperDataset
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from architecture import ConvolutionalEncoder
 import yaml
 from training import Trainer
@@ -11,6 +11,21 @@ import os
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VERBOSE = True
+
+
+def subsample_dataset(dataset: Dataset, length=None, fraction=None):
+    if length is not None:
+        assert length > 0 and length <= len(dataset), "Length must be positive and less than or equal to dataset length"
+        subset_size = length
+    elif fraction is not None:
+        assert 0 < fraction <= 1, "Fraction must be between 0 and 1"
+        subset_size = int(len(dataset) * fraction)
+    else:
+        subset_size = len(dataset)  # use full dataset if no len or fraction provided
+
+    indices_subset = list(range(subset_size))
+    subset = torch.utils.data.Subset(dataset, indices_subset)
+    return subset
 
 
 def get_data(config):
@@ -28,17 +43,20 @@ def get_data(config):
     dataset = GripperDataset(abs_path=path, 
                             #  sessions=sessions, 
                              transform=preprocess,
-                             images_to_load=["Images"])
-    torch.manual_seed(6) # for reproducibility
+                             images_to_load=config["data"]["images_to_load"])
+    print(f"Total dataset size: {len(dataset)}")
 
+    torch.manual_seed(6) # for reproducibility
     split = config["data"]["split"] # train, val, test
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
-    print(f"Total dataset size: {len(dataset)}")
-    print(f"Len train dataset: {len(train_dataset)}, Len val dataset: {len(val_dataset)}")
-    train_loader = DataLoader(train_dataset, 
+    train_dataset_used = subsample_dataset(train_dataset, length=config["data"]["train_fraction_used"])
+    val_dataset_used = subsample_dataset(val_dataset, length=config["data"]["val_fraction_used"])
+    print(f"Len train dataset: {len(train_dataset_used)}, Len val dataset: {len(val_dataset_used)}")
+
+    train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
                             shuffle=True)
-    val_loader = DataLoader(val_dataset,
+    val_loader = DataLoader(val_dataset_used,
                             batch_size=batch_size)
     test_loader = DataLoader(test_dataset,
                             batch_size=batch_size)
