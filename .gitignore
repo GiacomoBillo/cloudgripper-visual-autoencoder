@@ -31,3 +31,12 @@ data backups/test
 data backups/test
 data backups/successful2 copy
 data backups
+
+# checkpoints and logs
+*.pth
+*.pt
+events.out.tfevents.*
+train*.json
+val*.json
+
+.vscode/*
