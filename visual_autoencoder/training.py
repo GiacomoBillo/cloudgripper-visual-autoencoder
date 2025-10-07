@@ -13,7 +13,20 @@ BREAK_LOADER = 1 # break epoch after this fraction of the loader (for quick test
 class Trainer:
     def __init__(self, model, config):
         self.model = model
-        self.optimizer = torch.optim.Adam(self.model.parameters())
+        
+        # learning rate
+        self.lr = config["training"]["learning_rate"]
+        if self.lr is None:
+            self.lr = 0.001
+
+        # optimizer
+        optimizer_type = config["training"]["optimizer"]
+        if optimizer_type is None or optimizer_type == "Adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        elif optimizer_type == "SGD":
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
+
+        # loss function
         self.criterion = torch.nn.MSELoss()
         self.model.to(DEVICE)
 
