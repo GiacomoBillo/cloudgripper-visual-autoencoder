@@ -1,15 +1,15 @@
 model:
-  name: "ConvolutionalEncoder"
+  name: null # base name, ex. "ConvolutionalEncoder"
   input_channels: 3
-  dimensions_to_learn: [0] # x
+  dimensions_to_learn: [0] # x, y, z, r, g -> 0, 1, 2, 3, 4
 
 training:
   batch_size: 32
   epochs: 100
   validation: true
   early_stopping: false
-  optimizer: "Adam" # "Adam", "SGD"
-  learning_rate: 0.001 # null -> default
+  optimizer: null # "Adam", "SGD"
+  learning_rate: null # null -> default
   
 data:
   dataset_path: "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\toy_dataset_xz"
