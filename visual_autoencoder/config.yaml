@@ -1,7 +1,8 @@
 model:
   name: null # base name, ex. "ConvolutionalEncoder"
+  type: "decoder" # "encoder" or "decoder"
   input_channels: 3
-  dimensions_to_learn: [0] # x, y, z, r, g -> 0, 1, 2, 3, 4
+  dimensions_to_learn: [0,1,2,3,4] # x, y, z, r, g -> 0, 1, 2, 3, 4
 
 training:
   batch_size: 32

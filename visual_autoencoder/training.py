@@ -32,32 +32,42 @@ class Trainer:
 
         self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
 
-    def _train_step(self, batch):
+    def _inference_step(self, batch, verbose=False):
         images, labels = batch
         images = images.to(DEVICE)
         labels = labels.to(DEVICE)
+
+        # decide input and target based on model type
+        if "encoder" in self.model.model_type:
+            outputs = self.model(images)
+            loss = self.criterion(outputs, labels[:,self.dimensions_to_learn])
+
+            if verbose:
+                print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
+                print(f"Ground truth: x={labels[0,0]:.2f}")#, z={labels[0,2]:.2f}")
         
+        elif "decoder" in self.model.model_type:
+            outputs = self.model(labels[:,self.dimensions_to_learn])
+            loss = self.criterion(outputs, images)
+
+            # TODO: if verbose plot reconstructed image vs input image
+        else:
+            raise ValueError(f"Unknown model type: {self.model.model_type}")
+        
+        return outputs, loss
+
+
+    def _train_step(self, batch):        
         self.optimizer.zero_grad()
-        outputs = self.model(images)
-        loss = self.criterion(outputs, labels[:,self.dimensions_to_learn])
+        outputs, loss = self._inference_step(batch)
         loss.backward()
         self.optimizer.step()
-
         return loss
     
+    
     def _val_step(self, batch, verbose=False):
-        images, labels = batch
-        images = images.to(DEVICE)
-        labels = labels.to(DEVICE)
-        
         with torch.no_grad():
-            outputs = self.model(images)
-            loss = self.criterion(outputs, labels[:,self.dimensions_to_learn]) 
-
-        if verbose:
-            print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
-            print(f"Ground truth: x={labels[0,0]:.2f}")#, z={labels[0,2]:.2f}")
-
+            outputs, loss = self._inference_step(batch, verbose)
         return loss
     
     

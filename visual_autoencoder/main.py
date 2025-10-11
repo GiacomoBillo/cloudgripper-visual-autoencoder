@@ -1,6 +1,6 @@
 import torch
 from torchinfo import summary
-from architecture import ConvolutionalEncoder
+from architecture import ConvolutionalEncoder, ConvolutionalDecoder
 import yaml
 from training import Trainer
 import os
@@ -20,12 +20,21 @@ if __name__ == "__main__":
     # create model name
     model_name = create_model_name(config, verbose=VERBOSE)
 
-    # create model
-    model = ConvolutionalEncoder(
-        model_name=model_name,
-        output_dim=len(config["model"]["dimensions_to_learn"])
-    ).to(DEVICE)
-    summary(model, input_size=(1, 3, 45, 80))
+    model_type = config["model"]["type"]
+    if model_type == "encoder":
+        # create encoder
+        model = ConvolutionalEncoder(
+            model_name=model_name,
+            output_dim=len(config["model"]["dimensions_to_learn"])
+        ).to(DEVICE)
+        summary(model, input_size=(1, 3, 45, 80))
+    elif model_type == "decoder":
+        # create decoder
+        model = ConvolutionalDecoder(
+            model_name=model_name,
+            input_dim=len(config["model"]["dimensions_to_learn"])
+        )
+        summary(model, input_size=(1, len(config["model"]["dimensions_to_learn"])))
 
     """
     # dimension example with random input
@@ -38,15 +47,6 @@ if __name__ == "__main__":
     # dataset
     train_loader, val_loader, test_loader = get_data(config, verbose=VERBOSE)
     
-    """
-    # plot one downscaled image
-    import matplotlib.pyplot as plt
-    image_np = dataset[0][0].permute(1, 2, 0).numpy()
-    plt.imshow(image_np)
-    plt.axis('off')  # Hide axis
-    plt.show()
-    """
-
     # train model
     trainer = Trainer(model, config)
     print("Training model...")
