@@ -5,6 +5,7 @@ import yaml
 from training import Trainer
 import os
 from utils import get_data, create_model_name
+from accelerate import Accelerator # for multigpu
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -17,6 +18,9 @@ if __name__ == "__main__":
     with open(config_file) as file:
         config = yaml.safe_load(file)
 
+    # accelerator for multigpu
+    accelerator = Accelerator()
+
     # create model name
     model_name = create_model_name(config, verbose=VERBOSE)
 
@@ -25,6 +29,7 @@ if __name__ == "__main__":
         # create encoder
         model = ConvolutionalEncoder(
             model_name=model_name,
+            accelerator=accelerator,
             output_dim=len(config["model"]["dimensions_to_learn"])
         ).to(DEVICE)
         summary(model, input_size=(1, 3, 45, 80))
@@ -32,6 +37,7 @@ if __name__ == "__main__":
         # create decoder
         model = ConvolutionalDecoder(
             model_name=model_name,
+            accelerator=accelerator,
             input_dim=len(config["model"]["dimensions_to_learn"])
         )
         summary(model, input_size=(1, len(config["model"]["dimensions_to_learn"])))

@@ -19,9 +19,9 @@ data:
   split: [8000, 2000, 300] # train, val, test split of the dataset
   # num/ratio of samples to effectively use from the training set
   # if null, use all samples
-  train_fraction_used: 32 # null
+  train_fraction_used: null # null
   # num or ratio of samples to effectively use from the validation set
   # if null, use all samples
-  val_fraction_used: 32 # null
+  val_fraction_used: null # null
   images_to_load: ["Images"]
 

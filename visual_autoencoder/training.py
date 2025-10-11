@@ -3,17 +3,21 @@ from tqdm import tqdm
 import os
 import json
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader
 import numpy as np
+from architecture import AcceleratedArchitecture
 
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BREAK_LOADER = 1 # break epoch after this fraction of the loader (for quick testing)
 
 
 class Trainer:
-    def __init__(self, model, config):
+    def __init__(self, model: AcceleratedArchitecture, config):
         self.model = model
-        
+        self.accelerator = model.accelerator # unwrap accelerator 
+
+        self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
+
         # learning rate
         self.lr = config["training"]["learning_rate"]
         if self.lr is None:
@@ -28,14 +32,12 @@ class Trainer:
 
         # loss function
         self.criterion = torch.nn.MSELoss()
-        self.model.to(DEVICE)
 
-        self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
 
     def _inference_step(self, batch, verbose=False):
         images, labels = batch
-        images = images.to(DEVICE)
-        labels = labels.to(DEVICE)
+        # images = images.to(DEVICE) done implicitly by accelerator
+        # labels = labels.to(DEVICE)
 
         # decide input and target based on model type
         if "encoder" in self.model.model_type:
@@ -60,7 +62,7 @@ class Trainer:
     def _train_step(self, batch):        
         self.optimizer.zero_grad()
         outputs, loss = self._inference_step(batch)
-        loss.backward()
+        self.accelerator.backward(loss)  # instead of loss.backward()
         self.optimizer.step()
         return loss
     
@@ -72,19 +74,22 @@ class Trainer:
     
     
     def train_model(self, 
-                    train_loader, 
-                    val_loader=None, 
+                    train_loader: DataLoader, 
+                    val_loader: DataLoader=None, 
                     early_stopping_enabled=True,
                     epochs=20, 
                     verbose=True, 
                     patience=10):
-        self.model.to(DEVICE)
+        
+        # prepare for accelerator -> implicit to device (cpu, gpu or multi-gpu)
+        self.model, self.optimizer, train_loader, val_loader = self.accelerator.prepare(self.model, self.optimizer, train_loader, val_loader)
 
         writer = SummaryWriter(log_dir=self.model.model_path) # for tensorboard
         train_losses = []
         val_losses = []
         if early_stopping_enabled:
             early_stopping = self.EarlyStopping(writer, patience=patience, verbose=verbose)
+
 
         for epoch in tqdm(range(epochs), 
                           desc="Training", 
