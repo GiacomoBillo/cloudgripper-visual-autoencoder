@@ -11,6 +11,12 @@ from tqdm import tqdm
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+import re
+
+def natural_sort_key(s):
+    """Return a key for natural sorting (numeric parts as ints)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
+
 
 """
 Create Dataset object
@@ -73,7 +79,9 @@ class GripperDataset(Dataset):
                 print(f"Loading data session {session}")
             new_images = {}
             for image_type in images_to_load:
-                new_images[image_type] = os.listdir(image_path[image_type])
+                # first filter only jpeg files
+                new_images[image_type] = sorted([f for f in os.listdir(image_path[image_type]) if f.endswith('.jpeg')], key=natural_sort_key)
+                # then add full path
                 new_images[image_type] = [os.path.join(image_path[image_type], img) for img in new_images[image_type]]
             # new_bottom_images = os.listdir(bottom_images_path)
             # new_bottom_images = [os.path.join(bottom_images_path, img) for img in new_bottom_images]
@@ -99,6 +107,25 @@ class GripperDataset(Dataset):
             length of the dataset
         """
         return len(self.states)
+    
+    def load_tensor_or_image(self,image_path):
+        """
+        Loads a pre-transformed tensor if available, otherwise loads and transforms the image.
+        """
+        tensor_path = image_path.replace(".jpeg", "_tr.pt")
+
+        if os.path.exists(tensor_path):
+            # Directly load tensor (already transformed)
+            tensor = torch.load(tensor_path, map_location="cpu")
+            # Ensure it's a tensor and in [C,H,W] format
+            if not isinstance(tensor, torch.Tensor):
+                raise ValueError(f"Loaded object from {tensor_path} is not a torch.Tensor")
+            return tensor.float()
+        else:
+            # Fallback: load and transform the original image
+            img = load_image(image_path)
+            return self.transform(img)
+
 
     def __getitem__(self, index):
         """
@@ -110,8 +137,9 @@ class GripperDataset(Dataset):
         images = {}
         for image_type in self.images_to_load:
             image_path = self.images[image_type][index]
-            images[image_type] = load_image(image_path)
-            images[image_type] = self.transform(images[image_type])
+            # images[image_type] = load_image(image_path)
+            # images[image_type] = self.transform(images[image_type])
+            images[image_type] = self.load_tensor_or_image(image_path)
 
         # bottom_img_path = self.bottom_images[index]
         # top_img_path = self.top_images[index]
@@ -202,6 +230,23 @@ def transpose_channels_first(img):
         img = np.transpose(img, (2, 0, 1))
     return img
 
+
+def plot_image(image,
+               title=None,
+               ax=None,
+               fontsize=16
+               ):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    image = transpose_channels_last(image)
+    image = np.clip(image, 0, 1)
+    
+    ax.imshow(image)
+    ax.axis('off')
+    if title is not None:
+        ax.set_title(title, fontsize=fontsize)  
+    
 def plot_images(bottom_img, top_img, title=None):
     # move RGB channels to the last dimension
     bottom_img = transpose_channels_last(bottom_img)
