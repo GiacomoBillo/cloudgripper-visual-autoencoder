@@ -256,8 +256,10 @@ class FourierMLPDecoder(AcceleratedArchitecture):
         self.fourier_embedding = self.FourierEmbedding(
             input_dim=self.input_dim,
             num_frequencies=num_frequencies,
-            type="RFF") # input [5] -> output [5*2*num_frequencies]
-        
+            type="RFF",
+            device=accelerator.device
+        ) # input [5] -> output [5*2*num_frequencies]
+
         # MLP to image
         self.mlp = torch.nn.Sequential( 
             torch.nn.Linear(in_features=self.input_dim*2*num_frequencies, out_features=512), # expand dimension
@@ -274,12 +276,13 @@ class FourierMLPDecoder(AcceleratedArchitecture):
         # print(f"embedding shape: {embedding.shape}, flatten shape: {flatten_embedding.shape}")
         return self.mlp(flatten_embedding)
     
-    class FourierEmbedding():
+    class FourierEmbedding:
         # https://arxiv.org/html/2502.05482v1#S4.F4
-        def __init__(self, input_dim, num_frequencies, type="RFF"):
+        def __init__(self, input_dim, num_frequencies, type="RFF", device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
             self.input_dim = input_dim
             self.num_frequencies = num_frequencies
             self.type = type
+            self.device = device
 
             # Positional  Encoding (PE)
             if type == "PE":
@@ -290,6 +293,7 @@ class FourierMLPDecoder(AcceleratedArchitecture):
                 self.frequencies = torch.randn(( num_frequencies))
             else:
                 raise ValueError("Invalid Fourier embedding type")
+            self.frequencies = self.frequencies.to(self.device)
 
         # Apply Fourier feature mapping
         def __call__(self, x):
