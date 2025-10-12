@@ -6,17 +6,22 @@ from training import Trainer
 import os
 from utils import get_data, create_model_name
 from accelerate import Accelerator # for multigpu
+from dotenv import load_dotenv
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VERBOSE = True
+load_dotenv()  # from .env file
 
 
 if __name__ == "__main__":
-    # load hyperparameters
+    # load configurations from config.yaml
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
     with open(config_file) as file:
         config = yaml.safe_load(file)
+    # get dataset path from .env file
+    if config["data"]["dataset_path"] is None:
+        config["data"]["dataset_path"] = os.getenv("DATASET_PATH") 
 
     # accelerator for multigpu
     accelerator = Accelerator()

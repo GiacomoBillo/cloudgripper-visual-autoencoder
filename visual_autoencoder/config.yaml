@@ -9,19 +9,18 @@ training:
   epochs: 100
   validation: true
   early_stopping: false
-  optimizer: null # "Adam", "SGD"
+  optimizer: null # "Adam" by default, "SGD"
   learning_rate: null # null -> default
   
 data:
-  dataset_path: "D:\\Jack\\KTH\\Research project in Robotics\\cloudgripper-visual-autoencoder\\autograsper\\recorded_data\\toy_dataset_xz"
+  dataset_path: null # if null path to the dataset folder will be read from .env file
+  images_to_load: ["Images"] # top images
   top_img_shape: [720, 1280]
-  resize_factor: 16
+  resize_factor: 1 # to downscale the images
+
   split: [8000, 2000, 300] # train, val, test split of the dataset
   # num/ratio of samples to effectively use from the training set
-  # if null, use all samples
-  train_fraction_used: null # null
+  train_fraction_used: null # if null, use all samples
   # num or ratio of samples to effectively use from the validation set
-  # if null, use all samples
-  val_fraction_used: null # null
-  images_to_load: ["Images"]
+  val_fraction_used: null # if null, use all samples
 
