@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import os
+from torchinfo import summary
 import yaml
 from accelerate import Accelerator, load_checkpoint_in_model # for multigpu
 from abc import ABC, abstractmethod # abstract class
@@ -203,9 +204,9 @@ Deterministic decoder architecture
 to use as baseline for comparison with other generative decoders
 and to use as first step for 2-step decoders
 
-Architecture:
-- configuration embedding with Fourier embedding or MLP
-- MLP or CNN to image
+Architectures:
+- Convolutional decoder = MLP + CNN
+- Fourier decoder = Fourier embedding + MLP
 """
 class ConvolutionalDecoder(AcceleratedArchitecture):
     def __init__(self, 
@@ -237,6 +238,69 @@ class ConvolutionalDecoder(AcceleratedArchitecture):
         return self.decoder(x)
         
 
+class FourierMLPDecoder(AcceleratedArchitecture):
+    def __init__(self, 
+                 model_name, 
+                 config,
+                 accelerator: Accelerator,
+                 channels=3,
+                 ):
+        super().__init__(model_name, accelerator, channels)
+
+        self.input_dim = len(config["model"]["dimensions_to_learn"])
+        self.output_shape = [x//config["data"]["resize_factor"] for x in config["data"]["top_img_shape"]] # [height, width]
+        self.height, self.width = self.output_shape
+
+        # 5D config -> fourier embedding
+        num_frequencies = 32
+        self.fourier_embedding = self.FourierEmbedding(
+            input_dim=self.input_dim,
+            num_frequencies=num_frequencies,
+            type="RFF") # input [5] -> output [5*2*num_frequencies]
+        
+        # MLP to image
+        self.mlp = torch.nn.Sequential( 
+            torch.nn.Linear(in_features=self.input_dim*2*num_frequencies, out_features=512), # expand dimension
+            torch.nn.ReLU(),
+            torch.nn.Linear(in_features=512, out_features=channels*self.height*self.width),
+            torch.nn.Sigmoid(), # to keep outputs between 0 and 1
+            torch.nn.Unflatten(dim=1, unflattened_size=(channels, self.height, self.width)) # [3, H, W]
+        )
+        # print(self.decoder)
+
+    def forward(self, x):
+        embedding = self.fourier_embedding(x) # [batch, input_dim, num_frequencies*2]
+        flatten_embedding = embedding.view(embedding.shape[0], -1)  # [batch, input_dim * num_frequencies * 2]
+        # print(f"embedding shape: {embedding.shape}, flatten shape: {flatten_embedding.shape}")
+        return self.mlp(flatten_embedding)
+    
+    class FourierEmbedding():
+        # https://arxiv.org/html/2502.05482v1#S4.F4
+        def __init__(self, input_dim, num_frequencies, type="RFF"):
+            self.input_dim = input_dim
+            self.num_frequencies = num_frequencies
+            self.type = type
+
+            # Positional  Encoding (PE)
+            if type == "PE":
+                scale = 2.0
+                self.frequencies = scale ** torch.linspace(0, num_frequencies - 1, num_frequencies)
+            # Random Fourier Features (RFF)
+            elif type == "RFF":
+                self.frequencies = torch.randn(( num_frequencies))
+            else:
+                raise ValueError("Invalid Fourier embedding type")
+
+        # Apply Fourier feature mapping
+        def __call__(self, x):
+            """
+            x: [batch, input_dim]
+            Returns: [batch, input_dim, num_frequencies * 2]
+            """
+            x_proj = 2 * torch.pi * x.unsqueeze(-1) * self.frequencies
+            embedding = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+            return embedding
+
 
 if __name__ == "__main__":
     # test encoder and decoder with random input to check dimensions
@@ -245,9 +309,10 @@ if __name__ == "__main__":
     encoder = ConvolutionalEncoder(model_name="debug_enc")
     output = encoder(x)
     print("Output shape:", output.shape)  # should be [1, 5]
+
     decoder = ConvolutionalDecoder(model_name="debug_dec")
     reconstructed = decoder(output)
-    print("Reconstructed shape:", reconstructed.shape)  # should be [1, 3, 90, 160]
+    print("Reconstructed shape:", reconstructed.shape)
 
     # summary
     from torchinfo import summary

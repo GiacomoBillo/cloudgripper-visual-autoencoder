@@ -1,6 +1,6 @@
 import torch
 from torchinfo import summary
-from architecture import ConvolutionalEncoder, ConvolutionalDecoder
+from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMLPDecoder
 import yaml
 from training import Trainer
 import os
@@ -35,10 +35,15 @@ if __name__ == "__main__":
         summary(model, input_size=(1, 3, 45, 80))
     elif model_type == "decoder":
         # create decoder
-        model = ConvolutionalDecoder(
+        # model = ConvolutionalDecoder(
+        #     model_name=model_name,
+        #     accelerator=accelerator,
+        #     input_dim=len(config["model"]["dimensions_to_learn"])
+        # )
+        model = FourierMLPDecoder(
             model_name=model_name,
+            config=config,
             accelerator=accelerator,
-            input_dim=len(config["model"]["dimensions_to_learn"])
         )
         summary(model, input_size=(1, len(config["model"]["dimensions_to_learn"])))
 
