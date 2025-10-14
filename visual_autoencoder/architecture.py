@@ -71,15 +71,16 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
         self.accelerator.wait_for_everyone()
         # unwrap model from accelerator and save
         self.accelerator.save_model(self, 
-                                    os.path.join(self.model_path, "model.pth"), 
+                                    os.path.join(self.model_path), 
                                     safe_serialization=True)
     
     # load accelerated model
     def load_model(self):
         # load accelerated model
         load_checkpoint_in_model(self, 
-                                 os.path.join(self.model_path, "model.pth"), 
-                                 device_map={"":self.device})
+                                 os.path.join(self.model_path), 
+                                 # device_map={"":self.device} # not working?
+                                 )
 
         
 
@@ -238,7 +239,7 @@ class ConvolutionalDecoder(AcceleratedArchitecture):
         return self.decoder(x)
         
 
-class FourierMLPDecoder(AcceleratedArchitecture):
+class FourierMlpDecoder(AcceleratedArchitecture):
     def __init__(self, 
                  model_name, 
                  config,
@@ -276,9 +277,11 @@ class FourierMLPDecoder(AcceleratedArchitecture):
         # print(f"embedding shape: {embedding.shape}, flatten shape: {flatten_embedding.shape}")
         return self.mlp(flatten_embedding)
     
-    class FourierEmbedding:
+    class FourierEmbedding(nn.Module):
         # https://arxiv.org/html/2502.05482v1#S4.F4
         def __init__(self, input_dim, num_frequencies, type="RFF", device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+            super().__init__()
+            
             self.input_dim = input_dim
             self.num_frequencies = num_frequencies
             self.type = type
@@ -287,13 +290,15 @@ class FourierMLPDecoder(AcceleratedArchitecture):
             # Positional  Encoding (PE)
             if type == "PE":
                 scale = 2.0
-                self.frequencies = scale ** torch.linspace(0, num_frequencies - 1, num_frequencies)
+                frequencies = scale ** torch.linspace(0, num_frequencies - 1, num_frequencies)
             # Random Fourier Features (RFF)
             elif type == "RFF":
-                self.frequencies = torch.randn(( num_frequencies))
+                frequencies = torch.randn(( num_frequencies))
             else:
                 raise ValueError("Invalid Fourier embedding type")
-            self.frequencies = self.frequencies.to(self.device)
+
+            # save frequencies to self.frequencies as fixed parameters
+            self.register_buffer('frequencies', frequencies)
 
         # Apply Fourier feature mapping
         def __call__(self, x):

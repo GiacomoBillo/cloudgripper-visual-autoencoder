@@ -1,6 +1,6 @@
 import torch
 from torchinfo import summary
-from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMLPDecoder
+from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMlpDecoder
 import yaml
 from training import Trainer
 import os
@@ -45,7 +45,7 @@ if __name__ == "__main__":
         #     accelerator=accelerator,
         #     input_dim=len(config["model"]["dimensions_to_learn"])
         # )
-        model = FourierMLPDecoder(
+        model = FourierMlpDecoder(
             model_name=model_name,
             config=config,
             accelerator=accelerator,
