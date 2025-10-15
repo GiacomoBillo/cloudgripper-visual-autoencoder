@@ -4,7 +4,7 @@ from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMlpD
 import yaml
 from training import Trainer
 import os
-from utils import get_data, create_model_name
+from utils import get_data
 from accelerate import Accelerator # for multigpu
 from dotenv import load_dotenv
 
@@ -26,27 +26,21 @@ if __name__ == "__main__":
     # accelerator for multigpu
     accelerator = Accelerator()
 
-    # create model name
-    model_name = create_model_name(config, verbose=VERBOSE)
-
     model_type = config["model"]["type"]
     if model_type == "encoder":
         # create encoder
         model = ConvolutionalEncoder(
-            model_name=model_name,
+            config=config,
             accelerator=accelerator,
-            output_dim=len(config["model"]["dimensions_to_learn"])
-        ).to(DEVICE)
+        )
         summary(model, input_size=(1, 3, 45, 80))
     elif model_type == "decoder":
         # create decoder
         # model = ConvolutionalDecoder(
-        #     model_name=model_name,
+        #     config=config,
         #     accelerator=accelerator,
-        #     input_dim=len(config["model"]["dimensions_to_learn"])
         # )
         model = FourierMlpDecoder(
-            model_name=model_name,
             config=config,
             accelerator=accelerator,
         )

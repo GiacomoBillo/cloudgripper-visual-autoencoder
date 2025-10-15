@@ -1,14 +1,13 @@
 model:
   name: null # base name, ex. "ConvolutionalEncoder"
   type: "decoder" # "encoder" or "decoder"
-  input_channels: 3
   dimensions_to_learn: [0,1,2,3,4] # x, y, z, r, g -> 0, 1, 2, 3, 4
 
 training:
   batch_size: 32
   epochs: 100
   validation: true
-  early_stopping: false
+  early_stopping: true
   optimizer: null # "Adam" by default, "SGD"
   learning_rate: null # null -> default
   
@@ -16,11 +15,11 @@ data:
   dataset_path: null # if null path to the dataset folder will be read from .env file
   images_to_load: ["Images"] # top images
   top_img_shape: [720, 1280]
-  resize_factor: 1 # to downscale the images
+  resize_factor: 16 # to downscale the images
 
   split: [8000, 2000, 300] # train, val, test split of the dataset
   # num/ratio of samples to effectively use from the training set
-  train_fraction_used: null # if null, use all samples
+  train_fraction_used: 32 # if null, use all samples
   # num or ratio of samples to effectively use from the validation set
-  val_fraction_used: null # if null, use all samples
+  val_fraction_used: 32 # if null, use all samples
 

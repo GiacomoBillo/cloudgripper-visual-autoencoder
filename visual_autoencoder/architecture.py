@@ -6,6 +6,7 @@ import yaml
 from accelerate import Accelerator, load_checkpoint_in_model # for multigpu
 from abc import ABC, abstractmethod # abstract class
 import re
+from utils import create_model_name
 
 
 # load hyperparameters
@@ -13,27 +14,44 @@ config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.y
 with open(config_file) as file:
     CONFIG = yaml.safe_load(file)
 
+CHANNELS = 3
 
 """
 Abstract base class for all architectures
 """
 class BaseArchitecture(nn.Module, ABC):
     def __init__(self, 
-                 model_name=CONFIG["model"]["name"],
-                 channels=3,
+                 model_name=None,
+                 config=None,
+                 load_model=False,
                 ):
         super().__init__()  
 
-        # model name and path
-        self.model_name = model_name
+        if model_name is None and config is None:
+            raise ValueError("Model name or config must be provided")
+
+        # model name, type and path
         if model_name is None:
-            raise ValueError("Model name must be provided")
+            self.model_name = create_model_name(config)
+        else:
+            self.model_name = model_name
         self.model_type = re.sub(r'(?<!^)(?=[A-Z])', '_', self.__class__.__name__).lower()
         self.model_path = os.path.join(os.path.dirname(__file__), self.model_type, self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
 
-        self.channels = channels
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # if load model, load weights and config
+        if load_model:
+            self.load_model()
+            self.config = self.load_config() 
+        # if new model, use provided config
+        else:
+            self.config = config
+            self.save_config()
+
+        self.channels = CHANNELS
+
 
     @abstractmethod
     def forward(self, x):
@@ -46,20 +64,41 @@ class BaseArchitecture(nn.Module, ABC):
     
     # load model non-accelerated
     def load_model(self):
+        if not os.path.exists(os.path.join(self.model_path, "model.pth")):
+            raise FileNotFoundError(f"No model file found in {self.model_path}")
         self.load_state_dict(
             torch.load(os.path.join(self.model_path, "model.pth"), 
             map_location=self.device))
+
+    def save_config(self):
+        # save config to model path
+        with open(os.path.join(self.model_path, "config.yaml"), 'w') as file:
+            yaml.dump(self.config, file)
+
+    def load_config(self):
+        # check if config file exists
+        if not os.path.exists(os.path.join(self.model_path, "config.yaml")):
+            # raise FileNotFoundError(f"No config file found in {self.model_path}")
+            return None
+        
+        # load config from model path
+        with open(os.path.join(self.model_path, "config.yaml"), "r") as file:
+            config = yaml.safe_load(file)
+        return config
+    
+    def get_config(self):
+        return self.config
 
 """
 Abstract base class for architectures with accelerator support
 """
 class AcceleratedArchitecture(BaseArchitecture, ABC):
     def __init__(self, 
-                 model_name,
-                 accelerator: Accelerator, 
-                 channels,
+                 model_name=None,
+                 config=None,
+                 accelerator: Accelerator=None,
                 ):
-        super().__init__(model_name, channels)
+        super().__init__(model_name, config)
 
         # accelerator for multigpu
         self.accelerator = accelerator 
@@ -67,6 +106,9 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
     
     # save accelerated model
     def save_model(self):
+        if self.accelerator is None:
+            super().save_model()
+            return
         # wait and synchronize for multigpu
         self.accelerator.wait_for_everyone()
         # unwrap model from accelerator and save
@@ -76,6 +118,9 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
     
     # load accelerated model
     def load_model(self):
+        if self.accelerator is None:
+            super().load_model()
+            return
         # load accelerated model
         load_checkpoint_in_model(self, 
                                  os.path.join(self.model_path), 
@@ -162,13 +207,14 @@ and final fully conntected layer to 5D latent space
 """
 class ConvolutionalEncoder(AcceleratedArchitecture):
     def __init__(self, 
-                 model_name,
-                 accelerator: Accelerator,
-                 channels=3,
-                 output_dim=len(CONFIG["model"]["dimensions_to_learn"])):
-        super().__init__(model_name, accelerator, channels)
+                 model_name=None,
+                 config=None,
+                 load_model=False,
+                 accelerator: Accelerator=None,
+                ):
+        super().__init__(model_name, config, accelerator)
 
-        self.output_dim = output_dim
+        self.output_dim = len(self.config["model"]["dimensions_to_learn"])
         # architecture
         # self.encoder = torch.nn.Sequential( # input [3, 45, 80]
         #     EncoderBlock(in_channels=in_channels, out_channels=8),   # [8, 22, 40]
@@ -183,7 +229,7 @@ class ConvolutionalEncoder(AcceleratedArchitecture):
         #     torch.nn.Sigmoid() # to keep outputs between 0 and 1
         # )
         self.encoder = torch.nn.Sequential( # input [3, 45, 80]
-            EncoderBlock(in_channels=channels, out_channels=4),   # [4, 22, 40]
+            EncoderBlock(in_channels=self.channels, out_channels=4),   # [4, 22, 40]
             EncoderBlock(in_channels=4, out_channels=8),            # [8, 11, 20]
             EncoderBlock(in_channels=8, out_channels=16),           # [16, 5, 10]
             EncoderBlock(in_channels=16, out_channels=32, pooling=False),           # [32, 5, 10] no pooling
@@ -195,6 +241,9 @@ class ConvolutionalEncoder(AcceleratedArchitecture):
             torch.nn.Sigmoid() # to keep outputs between 0 and 1
         )
         # print(self.encoder)
+
+        if load_model:
+            self.load_model()
 
     def forward(self, x):
         return self.encoder(x)
@@ -211,13 +260,14 @@ Architectures:
 """
 class ConvolutionalDecoder(AcceleratedArchitecture):
     def __init__(self, 
-                 model_name, 
-                 accelerator: Accelerator,
-                 channels=3,
-                 input_dim=len(CONFIG["model"]["dimensions_to_learn"])):
-        super().__init__(model_name, accelerator, channels)
+                 model_name=None,
+                 config=None, 
+                 load_model=False,
+                 accelerator: Accelerator=None,
+                ):
+        super().__init__(model_name, config, accelerator)
 
-        self.input_dim = input_dim
+        self.input_dim = len(self.config["model"]["dimensions_to_learn"])
 
         # architecture
         self.decoder = torch.nn.Sequential( # input [5]
@@ -229,11 +279,14 @@ class ConvolutionalDecoder(AcceleratedArchitecture):
             DecoderBlock(in_channels=32, out_channels=16, out_padding=(1,0)),           # [16, 11, 20]
             DecoderBlock(in_channels=16, out_channels=8, out_padding=(0,0)),            # [8, 22, 40]
             DecoderBlock(in_channels=8, out_channels=4, out_padding=(1,0)),             # [4, 45, 80]
-            DoubleConv(in_channels=4, out_channels=channels),   # [3, 45, 80] no pooling
+            DoubleConv(in_channels=4, out_channels=self.channels),   # [3, 45, 80] no pooling
 
             nn.Sigmoid() # to keep outputs between 0 and 1
         )
         # print(self.decoder)
+
+        if load_model:
+            self.load_model()
 
     def forward(self, x):
         return self.decoder(x)
@@ -241,12 +294,12 @@ class ConvolutionalDecoder(AcceleratedArchitecture):
 
 class FourierMlpDecoder(AcceleratedArchitecture):
     def __init__(self, 
-                 model_name, 
-                 config,
-                 accelerator: Accelerator,
-                 channels=3,
+                 model_name=None, 
+                 config=None,
+                 load_model=False,
+                 accelerator: Accelerator=None,
                  ):
-        super().__init__(model_name, accelerator, channels)
+        super().__init__(model_name, config, accelerator)
 
         self.input_dim = len(config["model"]["dimensions_to_learn"])
         self.output_shape = [x//config["data"]["resize_factor"] for x in config["data"]["top_img_shape"]] # [height, width]
@@ -265,11 +318,14 @@ class FourierMlpDecoder(AcceleratedArchitecture):
         self.mlp = torch.nn.Sequential( 
             torch.nn.Linear(in_features=self.input_dim*2*num_frequencies, out_features=512), # expand dimension
             torch.nn.ReLU(),
-            torch.nn.Linear(in_features=512, out_features=channels*self.height*self.width),
+            torch.nn.Linear(in_features=512, out_features=self.channels*self.height*self.width),
             torch.nn.Sigmoid(), # to keep outputs between 0 and 1
-            torch.nn.Unflatten(dim=1, unflattened_size=(channels, self.height, self.width)) # [3, H, W]
+            torch.nn.Unflatten(dim=1, unflattened_size=(self.channels, self.height, self.width)) # [3, H, W]
         )
         # print(self.decoder)
+
+        if load_model:
+            self.load_model()
 
     def forward(self, x):
         embedding = self.fourier_embedding(x) # [batch, input_dim, num_frequencies*2]
