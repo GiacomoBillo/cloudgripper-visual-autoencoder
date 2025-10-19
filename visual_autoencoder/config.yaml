@@ -8,6 +8,7 @@ training:
   epochs: 100
   validation: true
   early_stopping: true
+  loss_function: "LPIPS" # null -> "MSE", or "LPIPS"
   optimizer: null # "Adam" by default, "SGD"
   learning_rate: null # null -> default
   

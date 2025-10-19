@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from architecture import AcceleratedArchitecture
 import time
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPSLoss
 
 
 BREAK_LOADER = 1 # break epoch after this fraction of the loader (for quick testing)
@@ -31,9 +32,22 @@ class Trainer:
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         elif optimizer_type == "SGD":
             self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
+        else:
+            raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
         # loss function
-        self.criterion = torch.nn.MSELoss()
+        self.loss_type = config["training"]["loss_function"]
+        if self.loss_type is None or self.loss_type == "MSE":
+            self.loss_fn = torch.nn.MSELoss() 
+            self.loss_type = "RMSE" # train with MSE, report RMSE
+        elif "decoder" in self.model.model_type and self.loss_type == "LPIPS":
+            # vgg more accurate better for backprop, alex faster
+            net_type = "vgg"
+            # normalize inputs from [0,1] (ours) to [-1,1] (for LPIPS)
+            self.loss_fn = LPIPSLoss(net_type=net_type, normalize=True)
+            self.logger.print(f"\nLPIPS loss with {net_type}")
+        else:
+            raise ValueError(f"Unknown loss function type: {self.loss_type}, for model type: {self.model.model_type}")
 
 
     def _inference_step(self, batch, verbose=False):
@@ -44,7 +58,7 @@ class Trainer:
         # decide input and target based on model type
         if "encoder" in self.model.model_type:
             outputs = self.model(images)
-            loss = self.criterion(outputs, labels[:,self.dimensions_to_learn])
+            loss = self.loss_fn(outputs, labels[:,self.dimensions_to_learn])
 
             if verbose:
                 print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
@@ -52,7 +66,7 @@ class Trainer:
         
         elif "decoder" in self.model.model_type:
             outputs = self.model(labels[:,self.dimensions_to_learn])
-            loss = self.criterion(outputs, images)
+            loss = self.loss_fn(outputs, images)
 
             # TODO: if verbose plot reconstructed image vs input image
         else:
@@ -84,7 +98,7 @@ class Trainer:
                     patience=10):
         
         # prepare for accelerator -> implicit to device (cpu, gpu or multi-gpu)
-        self.model, self.optimizer, train_loader, val_loader = self.accelerator.prepare(self.model, self.optimizer, train_loader, val_loader)
+        self.model, self.optimizer, self.loss_fn, train_loader, val_loader = self.accelerator.prepare(self.model, self.optimizer, self.loss_fn, train_loader, val_loader)
 
         writer = SummaryWriter(log_dir=self.model.model_path) # for tensorboard
         train_losses = []
@@ -109,7 +123,9 @@ class Trainer:
                 running_loss += loss.item() 
                 if i>len(train_loader)//BREAK_LOADER :
                     break
-            train_loss = np.sqrt(running_loss / (len(train_loader)//BREAK_LOADER)) # from MSE to RMSE
+            train_loss = running_loss / (len(train_loader)//BREAK_LOADER)
+            if self.loss_type == "RMSE":
+                train_loss = np.sqrt(train_loss) # from MSE to RMSE
 
             # print
             if verbose:
@@ -118,7 +134,7 @@ class Trainer:
                 label = label.unsqueeze(0)  # add batch dim
                 # print one sample prediction vs ground truth
                 loss = self._val_step((image, label), verbose=True)
-            self.logger.print(f"Training RMSE Loss: {train_loss:.4f}")
+            self.logger.print(f"Training {self.loss_type} loss: {train_loss:.4f}")
             # logging
             writer.add_scalar("Loss/train", train_loss, epoch)
             train_losses.append(train_loss)
@@ -134,10 +150,12 @@ class Trainer:
                     running_loss += loss.item()
                     if i>len(val_loader)//BREAK_LOADER :
                         break
-                val_loss = np.sqrt(running_loss / (len(val_loader)//BREAK_LOADER)) # from MSE to RMSE
+                val_loss = running_loss / (len(val_loader)//BREAK_LOADER) 
+                if self.loss_type == "RMSE":
+                    val_loss = np.sqrt(val_loss) # from MSE to RMSE
                 
                 # print
-                self.logger.print(f'Validation RMSE Loss: {val_loss:.4f}')
+                self.logger.print(f'Validation {self.loss_type} loss: {val_loss:.4f}')
                 # logging
                 writer.add_scalar("Loss/val", val_loss, epoch)
                 val_losses.append(val_loss)
@@ -164,7 +182,9 @@ class Trainer:
         total_time = time.time() - start_time
         hrs, secs = divmod(total_time, 3600)
         mins, secs = divmod(secs, 60)
-        self.logger.print(f"Training finished, time = {int(hrs)}h {int(mins)}m {int(secs)}s")
+        self.logger.print(f"Training finished"\
+                          f"\n\t- time = {int(hrs)}h {int(mins)}m {int(secs)}s"\
+                          f"\n\t- best validation {self.loss_type} loss = {early_stopping.best_loss:.4f}" if early_stopping is not None else "")
         self.logger.flush()
         writer.flush()
         writer.close()
