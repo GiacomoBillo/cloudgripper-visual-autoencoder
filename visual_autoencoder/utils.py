@@ -1,3 +1,6 @@
+import logging
+import os
+import sys
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -18,35 +21,32 @@ def subsample_dataset(dataset: Dataset, length=None, fraction=None):
     return subset
 
 
-def get_data(config, verbose=False):
+def get_data(config, logger=None):
+    # Preprocessing transforms
     top_img_shape = config["data"]["top_img_shape"] # original image shape
     resize_factor = config["data"]["resize_factor"] 
     resize_shape = [int(x//resize_factor) for x in top_img_shape]
-    if verbose:
-        print(f"Resizing images from {top_img_shape} to {resize_shape}")
     preprocess = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize(resize_shape),
             ])
+    
+    # Dataset
     batch_size = config["training"]["batch_size"]
     # sessions = np.arange(1,21) # sessions to load
     path = config["data"]["dataset_path"] # experiment path
     dataset = GripperDataset(abs_path=path, 
                             #  sessions=sessions, 
                              transform=preprocess,
-                             images_to_load=config["data"]["images_to_load"])
-    if verbose:
-        print(f"Total dataset size: {len(dataset)}")
+                             images_to_load=config["data"]["images_to_load"])        
 
     torch.manual_seed(6) # for reproducibility
     split = config["data"]["split"] # train, val, test
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, split)
     train_dataset_used = subsample_dataset(train_dataset, length=config["data"]["train_fraction_used"])
     val_dataset_used = subsample_dataset(val_dataset, length=config["data"]["val_fraction_used"])
-    if verbose:
-        print(f"Len train dataset: {len(train_dataset_used)}, "
-          f"Len val dataset: {len(val_dataset_used)}")
 
+    # DataLoaders
     train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
                             shuffle=True)
@@ -54,6 +54,12 @@ def get_data(config, verbose=False):
                             batch_size=batch_size)
     test_loader = DataLoader(test_dataset,
                             batch_size=batch_size)
+    
+    if logger:
+        logger.print(f"\n\nTotal dataset size: {len(dataset)}")
+        logger.print(f"Len train dataset: {len(train_dataset_used)}, "
+                    f"Len val dataset: {len(val_dataset_used)}")
+        logger.print(f"Resizing images from {top_img_shape} to {resize_shape}")
 
     return train_loader, val_loader, test_loader
 
@@ -88,3 +94,35 @@ def create_model_name(config, verbose=False):
     if verbose:
         print(f"Model name: {name}")
     return name
+
+
+class Logger:
+    def __init__(self, path, print_on_console=False):
+        self.path = path
+        self.print_on_console = print_on_console
+
+        # Initialize the logger
+        self.logger = logging.getLogger(path)
+        self.logger.setLevel(logging.INFO)
+        # formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        # File handler
+        file_handler = logging.FileHandler(os.path.join(self.path, "logs"), encoding="utf-8")
+        # file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(file_handler)
+
+        # Console handler
+        if self.print_on_console:
+            console_handler = logging.StreamHandler(sys.__stdout__)
+            # console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
+
+    def print(self, message, level=logging.INFO):
+        """Redirect print statements to the logger"""
+        self.logger.log(level, message)        
+
+    def flush(self):
+        self.logger.handlers[0].flush()  # flush file handler
+        if self.print_on_console:
+            sys.__stdout__.flush() 

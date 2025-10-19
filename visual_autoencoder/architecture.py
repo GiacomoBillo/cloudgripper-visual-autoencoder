@@ -1,13 +1,17 @@
 import torch
 from torch import nn
 import os
-from torchinfo import summary
+import torchinfo
 import yaml
 from accelerate import Accelerator, load_checkpoint_in_model # for multigpu
 from abc import ABC, abstractmethod # abstract class
 import re
 from utils import create_model_name
+from dotenv import load_dotenv
+from utils import Logger
 
+load_dotenv()  # from .env file
+VERBOSE = os.getenv("VERBOSE", "False").lower() == "true"
 
 # load hyperparameters
 config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
@@ -29,7 +33,7 @@ class BaseArchitecture(nn.Module, ABC):
 
         if model_name is None and config is None:
             raise ValueError("Model name or config must be provided")
-
+        
         # model name, type and path
         if model_name is None:
             self.model_name = create_model_name(config)
@@ -38,6 +42,7 @@ class BaseArchitecture(nn.Module, ABC):
         self.model_type = re.sub(r'(?<!^)(?=[A-Z])', '_', self.__class__.__name__).lower()
         self.model_path = os.path.join(os.path.dirname(__file__), self.model_type, self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
+        self.logger = Logger(self.model_path, print_on_console=VERBOSE)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -49,6 +54,7 @@ class BaseArchitecture(nn.Module, ABC):
         else:
             self.config = config
             self.save_config()
+            self.logger.print(f"Model name: {self.model_name}\n")
 
         self.channels = CHANNELS
 
@@ -88,6 +94,12 @@ class BaseArchitecture(nn.Module, ABC):
     
     def get_config(self):
         return self.config
+
+    def summary(self, input_size):
+        self.logger.print("Model architecture:")
+        info = torchinfo.summary(self, input_size=input_size, verbose=0)
+        self.logger.print(info)
+
 
 """
 Abstract base class for architectures with accelerator support

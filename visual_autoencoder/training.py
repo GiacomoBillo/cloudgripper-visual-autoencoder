@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 import numpy as np
 from architecture import AcceleratedArchitecture
+import time
 
 
 BREAK_LOADER = 1 # break epoch after this fraction of the loader (for quick testing)
@@ -15,6 +16,7 @@ class Trainer:
     def __init__(self, model: AcceleratedArchitecture, config):
         self.model = model
         self.accelerator = model.accelerator # unwrap accelerator 
+        self.logger = self.model.logger # unwrap logger
 
         self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
 
@@ -88,13 +90,16 @@ class Trainer:
         train_losses = []
         val_losses = []
         if early_stopping_enabled:
-            early_stopping = self.EarlyStopping(writer, patience=patience, verbose=verbose)
+            early_stopping = self.EarlyStopping(writer, self.model.logger, patience=patience)
 
+        self.logger.print("\n\nStarting training...", )
+        start_time = time.time()
 
         for epoch in tqdm(range(epochs), 
                           desc="Training", 
                           unit="epoch",
                           total=epochs):
+            self.logger.print(f"\nEpoch {epoch+1}/{epochs}")
             
             # training
             self.model.train()
@@ -113,7 +118,7 @@ class Trainer:
                 label = label.unsqueeze(0)  # add batch dim
                 # print one sample prediction vs ground truth
                 loss = self._val_step((image, label), verbose=True)
-                print(f"\nTraining RMSE Loss: {train_loss:.4f}")
+            self.logger.print(f"Training RMSE Loss: {train_loss:.4f}")
             # logging
             writer.add_scalar("Loss/train", train_loss, epoch)
             train_losses.append(train_loss)
@@ -132,8 +137,7 @@ class Trainer:
                 val_loss = np.sqrt(running_loss / (len(val_loader)//BREAK_LOADER)) # from MSE to RMSE
                 
                 # print
-                if verbose:
-                    print(f'Validation RMSE Loss: {val_loss:.4f}')
+                self.logger.print(f'Validation RMSE Loss: {val_loss:.4f}')
                 # logging
                 writer.add_scalar("Loss/val", val_loss, epoch)
                 val_losses.append(val_loss)
@@ -156,15 +160,20 @@ class Trainer:
             if val_loader is None or not early_stopping_enabled: 
                 # checkpoint
                 self.model.save_model()
-        
+
+        total_time = time.time() - start_time
+        hrs, secs = divmod(total_time, 3600)
+        mins, secs = divmod(secs, 60)
+        self.logger.print(f"Training finished, time = {int(hrs)}h {int(mins)}m {int(secs)}s")
+        self.logger.flush()
         writer.flush()
         writer.close()
 
 
     class EarlyStopping:
-        def __init__(self, writer, patience=10, verbose=False):
+        def __init__(self, writer, logger, patience=10):
             self.patience = patience
-            self.verbose = verbose
+            self.logger = logger
             self.counter = 0
             self.best_loss = float("inf")
             self.early_stop = False
@@ -179,13 +188,11 @@ class Trainer:
             else:
                 self.counter += 1
                 self.improved = False
-                if self.verbose:
-                    print(f"Patience count: {self.counter}/{self.patience}")
+                self.logger.print(f"Patience count: {self.counter}/{self.patience}")
                 if self.counter >= self.patience:
                     self.early_stop = True
                     self.writer.add_text("Early stopping", f"Early stopping at epoch {epoch + 1}")
-                    if self.verbose:
-                        print(f"Early stopping at epoch {epoch + 1}")
+                    self.logger.print(f"Early stopping at epoch {epoch + 1}")
 
             return self.early_stop
 

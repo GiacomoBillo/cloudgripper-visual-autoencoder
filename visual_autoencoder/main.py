@@ -1,5 +1,4 @@
 import torch
-from torchinfo import summary
 from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMlpDecoder
 import yaml
 from training import Trainer
@@ -10,7 +9,6 @@ from dotenv import load_dotenv
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-VERBOSE = True
 load_dotenv()  # from .env file
 
 
@@ -33,7 +31,7 @@ if __name__ == "__main__":
             config=config,
             accelerator=accelerator,
         )
-        summary(model, input_size=(1, 3, 45, 80))
+        model.summary(input_size=(1, 3, 45, 80))
     elif model_type == "decoder":
         # create decoder
         # model = ConvolutionalDecoder(
@@ -44,7 +42,7 @@ if __name__ == "__main__":
             config=config,
             accelerator=accelerator,
         )
-        summary(model, input_size=(1, len(config["model"]["dimensions_to_learn"])))
+        model.summary(input_size=(1, len(config["model"]["dimensions_to_learn"])))
 
     """
     # dimension example with random input
@@ -55,14 +53,12 @@ if __name__ == "__main__":
     """
 
     # dataset
-    train_loader, val_loader, test_loader = get_data(config, verbose=VERBOSE)
+    train_loader, val_loader, test_loader = get_data(config, logger=model.logger)
     
     # train model
     trainer = Trainer(model, config)
-    print("Training model...")
     trainer.train_model(train_loader, 
                         val_loader=val_loader if config["training"]["validation"] else None, # early stopping if val_loader is provided
                         early_stopping_enabled=config["training"]["early_stopping"],
-                        epochs=config["training"]["epochs"],
-                        verbose=VERBOSE)
-    print("Training complete")
+                        epochs=config["training"]["epochs"]
+                        )
