@@ -38,5 +38,6 @@ data backups
 events.out.tfevents.*
 train*.json
 val*.json
+visual_autoencoder/trained_models/*
 
 .vscode/*

@@ -40,7 +40,7 @@ class BaseArchitecture(nn.Module, ABC):
         else:
             self.model_name = model_name
         self.model_type = re.sub(r'(?<!^)(?=[A-Z])', '_', self.__class__.__name__).lower()
-        self.model_path = os.path.join(os.path.dirname(__file__), self.model_type, self.model_name)
+        self.model_path = os.path.join(os.path.dirname(__file__), "trained_models", self.model_type, self.model_name)
         os.makedirs(self.model_path, exist_ok=True)
         self.logger = Logger(self.model_path, print_on_console=VERBOSE)
 
