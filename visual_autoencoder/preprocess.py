@@ -3,6 +3,9 @@ from torchvision import transforms
 import os
 from PIL import Image
 import torch
+import tqdm
+from dotenv import load_dotenv
+load_dotenv()
 
 import json
 import csv
@@ -59,12 +62,9 @@ def log_to_csv(log_path, csv_path):
     return log_data  # return parsed data for further inspection
 
 
-
 if __name__ == "__main__":
     path = os.getenv("DATASET_PATH") # experiment path
-    log_data = log_to_csv(os.path.join(path,"1/task/states.json"), os.path.join(path,"1/task/states.csv"))
-
-
+    sessions = os.listdir(path)
 
     # preprocess images: resize and convert to tensor
     top_img_shape = np.array([720, 1280])
@@ -76,13 +76,24 @@ if __name__ == "__main__":
             transforms.Resize(resize_shape)
             ])
 
-    for fname in os.listdir(path):
-        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-            img_path = os.path.join(path, fname)
-            img = Image.open(img_path).convert('RGB')
-            img_tensor = preprocess(img)
-            out_fname = os.path.splitext(fname)[0] + '_tr.pt'
-            torch.save(img_tensor, os.path.join(path, out_fname))
+    for session in sessions:
+        # print(f"path {path}, {type(path)}, session {session}, {type(session)}")
+        session_path = os.path.join(path, session, "task")
+        if not os.path.isdir(session_path):
+            continue
+
+        print(f"\nProcessing session: {session_path}")
+        log_data = log_to_csv(os.path.join(session_path,"states.json"), os.path.join(session_path,"states.csv"))
+
+
+        top_images_path = os.path.join(session_path, "Images")
+        for fname in tqdm.tqdm(os.listdir(top_images_path)):
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+                img_path = os.path.join(top_images_path, fname)
+                img = Image.open(img_path).convert('RGB')
+                img_tensor = preprocess(img)
+                out_fname = os.path.splitext(fname)[0] + '_tr.pt'
+                torch.save(img_tensor, os.path.join(top_images_path, out_fname))
 
     #         # Convert tensor back to PIL Image for saving
     #         # img_out = transforms.ToPILImage()(img_tensor)
