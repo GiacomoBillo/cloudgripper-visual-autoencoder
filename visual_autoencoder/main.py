@@ -52,7 +52,8 @@ if __name__ == "__main__":
     print("Output shape:", output.shape)  # should be [1, 5]
     """
 
-    # dataset
+    # dataset and loaders
+    config["data"]["num_workers"] = int(os.getenv("NUM_WORKERS", 0)) # set num_workers from .env, default 0
     train_loader, val_loader, test_loader = get_data(config, logger=model.logger)
     
     # train model

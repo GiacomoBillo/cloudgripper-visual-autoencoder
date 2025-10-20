@@ -47,14 +47,18 @@ def get_data(config, logger=None):
     val_dataset_used = subsample_dataset(val_dataset, length=config["data"]["val_fraction_used"])
 
     # DataLoaders
+    num_workers = config["data"]["num_workers"]
     train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
-                            shuffle=True)
+                            shuffle=True,
+                            num_workers=num_workers)
     val_loader = DataLoader(val_dataset_used,
-                            batch_size=batch_size)
+                            batch_size=batch_size,
+                            num_workers=num_workers)
     test_loader = DataLoader(test_dataset,
-                            batch_size=batch_size)
-    
+                            batch_size=batch_size,
+                            num_workers=num_workers)
+
     if logger:
         logger.print(f"\n\nTotal dataset size: {len(dataset)}")
         logger.print(f"Len train dataset: {len(train_dataset_used)}, "
