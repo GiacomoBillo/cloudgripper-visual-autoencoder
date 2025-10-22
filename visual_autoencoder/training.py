@@ -8,16 +8,17 @@ import numpy as np
 from architecture import AcceleratedArchitecture
 import time
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPSLoss
+from accelerate.utils import broadcast
 
-
-BREAK_LOADER = 1 # break epoch after this fraction of the loader (for quick testing)
 
 
 class Trainer:
     def __init__(self, model: AcceleratedArchitecture, config):
         self.model = model
+        self.model_path = model.model_path
+        self.model_type = model.model_type
         self.accelerator = model.accelerator # unwrap accelerator 
-        self.logger = self.model.logger # unwrap logger
+        self.logger = model.logger # unwrap logger
 
         self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
 
@@ -40,14 +41,14 @@ class Trainer:
         if self.loss_type is None or self.loss_type == "MSE":
             self.loss_fn = torch.nn.MSELoss() 
             self.loss_type = "RMSE" # train with MSE, report RMSE
-        elif "decoder" in self.model.model_type and self.loss_type == "LPIPS":
+        elif "decoder" in self.model_type and self.loss_type == "LPIPS":
             # vgg more accurate better for backprop, alex faster
             net_type = "vgg"
             # normalize inputs from [0,1] (ours) to [-1,1] (for LPIPS)
             self.loss_fn = LPIPSLoss(net_type=net_type, normalize=True)
             self.logger.print(f"\nLPIPS loss with {net_type}")
         else:
-            raise ValueError(f"Unknown loss function type: {self.loss_type}, for model type: {self.model.model_type}")
+            raise ValueError(f"Unknown loss function type: {self.loss_type}, for model type: {self.model_type}")
 
 
     def _inference_step(self, batch, verbose=False):
@@ -56,7 +57,7 @@ class Trainer:
         # labels = labels.to(DEVICE)
 
         # decide input and target based on model type
-        if "encoder" in self.model.model_type:
+        if "encoder" in self.model_type:
             outputs = self.model(images)
             loss = self.loss_fn(outputs, labels[:,self.dimensions_to_learn])
 
@@ -64,13 +65,13 @@ class Trainer:
                 print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
                 print(f"Ground truth: x={labels[0,0]:.2f}")#, z={labels[0,2]:.2f}")
         
-        elif "decoder" in self.model.model_type:
+        elif "decoder" in self.model_type:
             outputs = self.model(labels[:,self.dimensions_to_learn])
             loss = self.loss_fn(outputs, images)
 
             # TODO: if verbose plot reconstructed image vs input image
         else:
-            raise ValueError(f"Unknown model type: {self.model.model_type}")
+            raise ValueError(f"Unknown model type: {self.model_type}")
         
         return outputs, loss
 
@@ -88,23 +89,69 @@ class Trainer:
             outputs, loss = self._inference_step(batch, verbose)
         return loss
     
+    def _on_main_save_model(self):
+        self.accelerator.wait_for_everyone()  #  sync all processes
+        if self.accelerator.is_main_process:
+            self.accelerator.unwrap_model(self.model).save_model() # unwrap to original model and save
+        self.accelerator.wait_for_everyone() 
+
+    def _on_main_load_model(self):
+        self.accelerator.wait_for_everyone()  #  sync all processes
+        if self.accelerator.is_main_process:
+            self.model = self.accelerator.unwrap_model(self.model).load_model() # load model
+            self.model = self.accelerator.prepare(self.model)  # re-prepare model with accelerator
+        self.accelerator.wait_for_everyone() 
+
+    def _on_main_print(self, msg):
+        if self.accelerator.is_main_process:
+            self.logger.print(msg)
+
+    def gather_loss(self, running_loss: torch.Tensor, loader_length):
+        # gather loss from all gpus
+        total_batches = loader_length * self.accelerator.num_processes
+        loss_sum = self.accelerator.gather(running_loss).sum().item()
+        loss = loss_sum / total_batches
+        if self.loss_type == "RMSE":
+            loss = np.sqrt(loss) # from MSE to RMSE
+        return loss
     
+    def _broadcast_bool(self, value):
+        # Convert bools to tensor
+        tensor = torch.tensor(int(value), device=self.accelerator.device)
+        # Broadcast from main
+        tensor = broadcast(tensor, src=0)
+        # Convert back to bools
+        bool_value = bool(tensor.item())
+        return bool_value
+
+
     def train_model(self, 
                     train_loader: DataLoader, 
                     val_loader: DataLoader=None, 
                     early_stopping_enabled=True,
                     epochs=20, 
-                    verbose=True, 
                     patience=10):
         
-        # prepare for accelerator -> implicit to device (cpu, gpu or multi-gpu)
-        self.model, self.optimizer, self.loss_fn, train_loader, val_loader = self.accelerator.prepare(self.model, self.optimizer, self.loss_fn, train_loader, val_loader)
+        if self.accelerator.num_processes > 1:
+            self.logger.print(f"Using {self.accelerator.num_processes} processes for training.")
+            self._train_distributed_model(train_loader, val_loader, early_stopping_enabled, epochs, patience)
 
+        else:
+            self.logger.print(f"Using single process for training, device: {self.accelerator.device}")
+            self._train_single_model(train_loader, val_loader, early_stopping_enabled, epochs, patience)
+
+
+    def _train_single_model(self, train_loader, val_loader, early_stopping_enabled, epochs, patience):
+        # prepare for accelerator -> implicit to device (cpu, gpu or multi-gpu)
+        self.model, self.optimizer, self.loss_fn, train_loader = self.accelerator.prepare(self.model, self.optimizer, self.loss_fn, train_loader)
+        if val_loader:
+            val_loader = self.accelerator.prepare(val_loader)
+            
         writer = SummaryWriter(log_dir=self.model.model_path) # for tensorboard
         train_losses = []
         val_losses = []
         if early_stopping_enabled:
-            early_stopping = self.EarlyStopping(writer, self.model.logger, patience=patience)
+            early_stopping = self.EarlyStopping(writer, self.logger, patience=patience)
 
         self.logger.print("\n\nStarting training...", )
         start_time = time.time()
@@ -121,19 +168,12 @@ class Trainer:
             for i, batch in enumerate(train_loader):
                 loss = self._train_step(batch)
                 running_loss += loss.item() 
-                if i>len(train_loader)//BREAK_LOADER :
-                    break
-            train_loss = running_loss / (len(train_loader)//BREAK_LOADER)
+
+            train_loss = running_loss / len(train_loader)
             if self.loss_type == "RMSE":
                 train_loss = np.sqrt(train_loss) # from MSE to RMSE
 
-            # print
-            if verbose:
-                image, label = train_loader.dataset[np.random.randint(len(train_loader.dataset))]
-                image = image.unsqueeze(0)  # add batch dim
-                label = label.unsqueeze(0)  # add batch dim
-                # print one sample prediction vs ground truth
-                loss = self._val_step((image, label), verbose=True)
+
             self.logger.print(f"Training {self.loss_type} loss: {train_loss:.4f}")
             # logging
             writer.add_scalar("Loss/train", train_loss, epoch)
@@ -148,9 +188,8 @@ class Trainer:
                 for i, batch in enumerate(val_loader):
                     loss = self._val_step(batch, verbose=i==len(val_loader)-1)
                     running_loss += loss.item()
-                    if i>len(val_loader)//BREAK_LOADER :
-                        break
-                val_loss = running_loss / (len(val_loader)//BREAK_LOADER) 
+
+                val_loss = running_loss / len(val_loader)
                 if self.loss_type == "RMSE":
                     val_loss = np.sqrt(val_loss) # from MSE to RMSE
                 
@@ -190,6 +229,106 @@ class Trainer:
         writer.close()
 
 
+    def _train_distributed_model(self, train_loader, val_loader, early_stopping_enabled, epochs, patience):
+
+        writer = SummaryWriter(log_dir=self.model_path) # for tensorboard
+        train_losses = []
+        val_losses = []
+        if early_stopping_enabled:
+            early_stopping = self.EarlyStopping(writer, self.logger, patience=patience)
+
+        self._on_main_print("\n\nStarting training...", )
+        start_time = time.time()
+
+        # prepare for accelerator -> implicit to device (cpu, gpu or multi-gpu)
+        self.model, self.optimizer, self.loss_fn, train_loader = self.accelerator.prepare(self.model, self.optimizer, self.loss_fn, train_loader)
+        if val_loader:
+            val_loader = self.accelerator.prepare(val_loader)
+
+        for epoch in tqdm(range(epochs), 
+                          desc="Training", 
+                          unit="epoch",
+                          total=epochs):
+            self._on_main_print(f"\nEpoch {epoch+1}/{epochs}")
+
+            # training
+            self.model.train()
+            running_loss = torch.tensor(0.0, device=self.accelerator.device)
+            for i, batch in enumerate(train_loader):
+                loss = self._train_step(batch)
+                running_loss += loss
+
+            # gather loss from all gpus
+            train_loss = self.gather_loss(running_loss, len(train_loader))
+            
+            self._on_main_print(f"Training {self.loss_type} loss: {train_loss:.4f}")
+            # logging
+            if self.accelerator.is_main_process:
+                writer.add_scalar("Loss/train", train_loss, epoch)
+                train_losses.append(train_loss)
+                self.save_learning_curve(train_losses, "train")
+
+
+            # validation
+            if val_loader is not None:
+                self.model.eval()
+                running_loss = torch.tensor(0.0, device=self.accelerator.device)
+                for i, batch in enumerate(val_loader):
+                    loss = self._val_step(batch, verbose=i==len(val_loader)-1)
+                    running_loss += loss
+
+                # gather loss from all gpus
+                val_loss = self.gather_loss(running_loss, len(val_loader))
+                
+                # print
+                self._on_main_print(f'Validation {self.loss_type} loss: {val_loss:.4f}')
+                # logging
+                if self.accelerator.is_main_process:
+                    writer.add_scalar("Loss/val", val_loss, epoch)
+                    val_losses.append(val_loss)
+                    self.save_learning_curve(val_losses, "val")
+                    writer.add_scalars("Learning_Curves", {"train": train_loss, "val": val_loss}, epoch)
+
+                # early stopping
+                if early_stopping_enabled:
+                    # check early stopping on main process
+                    if self.accelerator.is_main_process:
+                        stop_training = early_stopping(val_loss, epoch)
+                        improved = early_stopping.improved
+                    else:
+                        stop_training = False
+                        improved = False
+
+                    stop_training = self._broadcast_bool(stop_training)
+                    improved = self._broadcast_bool(improved)
+                    self.accelerator.wait_for_everyone()
+
+                    if stop_training:
+                        # restore best model
+                        self._on_main_load_model()
+                        # exit training loop
+                        break
+                    elif improved:
+                        # checkpoint
+                        self._on_main_save_model()
+
+            # if no val_loader or early stopping not enabled (no early stopping) 
+            # -> always save model
+            if val_loader is None or not early_stopping_enabled: 
+                # checkpoint
+                self._on_main_save_model()
+
+        total_time = time.time() - start_time
+        hrs, secs = divmod(total_time, 3600)
+        mins, secs = divmod(secs, 60)
+        self._on_main_print(f"Training finished"\
+                          f"\n\t- time = {int(hrs)}h {int(mins)}m {int(secs)}s"\
+                          f"\n\t- best validation {self.loss_type} loss = {early_stopping.best_loss:.4f}" if val_loader and early_stopping_enabled else "")
+        self.logger.flush()
+        writer.flush()
+        writer.close()
+
+
     class EarlyStopping:
         def __init__(self, writer, logger, patience=10):
             self.patience = patience
@@ -218,6 +357,6 @@ class Trainer:
 
 
     def save_learning_curve(self, losses, curve_name):
-        filename = os.path.join(self.model.model_path, f'{curve_name}_curve.json')
+        filename = os.path.join(self.model_path, f'{curve_name}_curve.json')
         with open(filename, "w") as file:
             json.dump(losses, file)

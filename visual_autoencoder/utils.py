@@ -101,9 +101,10 @@ def create_model_name(config, verbose=False):
 
 
 class Logger:
-    def __init__(self, path, print_on_console=False):
+    def __init__(self, path, print_on_console=False, accelerator=None):
         self.path = path
         self.print_on_console = print_on_console
+        self.accelerator = accelerator
 
         # Initialize the logger
         self.logger = logging.getLogger(path)
@@ -124,7 +125,13 @@ class Logger:
 
     def print(self, message, level=logging.INFO):
         """Redirect print statements to the logger"""
-        self.logger.log(level, message)        
+        if self.accelerator is not None:
+            # only log from main process
+            if self.accelerator.is_main_process:
+                self.logger.log(level, message)
+        else:
+            # always log if no accelerator
+            self.logger.log(level, message)        
 
     def flush(self):
         self.logger.handlers[0].flush()  # flush file handler

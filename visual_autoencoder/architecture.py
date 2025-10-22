@@ -100,6 +100,19 @@ class BaseArchitecture(nn.Module, ABC):
         info = torchinfo.summary(self, input_size=input_size, verbose=0)
         self.logger.print(info)
 
+    # TODO: for model and DDP wrapper
+    def _get_attr(self, name):
+        # if the model is wrapped in DDP, get attribute from module
+        if hasattr(self, "module"):
+            return getattr(self.module, name, None)
+        return getattr(self, name, None)
+
+    def get_model_path(self):
+        return self._get_attr("model_path")
+    
+    def get_logger(self):
+        return self._get_attr("logger")
+
 
 """
 Abstract base class for architectures with accelerator support
@@ -115,6 +128,7 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
         # accelerator for multigpu
         self.accelerator = accelerator 
         self.device = accelerator.device
+        self.logger.accelerator = accelerator # to print only from main process
     
     # save accelerated model
     def save_model(self):
