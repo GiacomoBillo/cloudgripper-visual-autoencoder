@@ -139,7 +139,7 @@ class Trainer:
         # Convert bools to tensor
         tensor = torch.tensor(int(value), device=self.accelerator.device)
         # Broadcast from main
-        tensor = broadcast(tensor, src=0)
+        tensor = broadcast(tensor)
         # Convert back to bools
         bool_value = bool(tensor.item())
         return bool_value
