@@ -127,8 +127,9 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
 
         # accelerator for multigpu
         self.accelerator = accelerator 
-        self.device = accelerator.device
-        self.logger.accelerator = accelerator # to print only from main process
+        if accelerator is not None:
+            self.device = accelerator.device
+            self.logger.accelerator = accelerator # to print only from main process
     
     # save accelerated model
     def save_model(self):

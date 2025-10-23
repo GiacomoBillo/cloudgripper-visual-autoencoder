@@ -11,6 +11,10 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPI
 from accelerate.utils import broadcast
 
 
+ARCHITECTURES_WITH_REFERENCE = [
+                                "UNetWithFiLM",
+                                 ]
+
 
 class Trainer:
     def __init__(self, model: AcceleratedArchitecture, config):
@@ -19,6 +23,12 @@ class Trainer:
         self.model_type = model.model_type
         self.accelerator = model.accelerator # unwrap accelerator 
         self.logger = model.logger # unwrap logger
+        
+        if type(model).__name__ in ARCHITECTURES_WITH_REFERENCE:
+            self.reference = True
+            self.delta = model.delta if hasattr(model, "delta") else False
+        else:
+            self.reference = None
 
         self.dimensions_to_learn = config["model"]["dimensions_to_learn"]
 
@@ -52,26 +62,36 @@ class Trainer:
 
 
     def _inference_step(self, batch, verbose=False):
-        images, labels = batch
-        # images = images.to(DEVICE) done implicitly by accelerator
-        # labels = labels.to(DEVICE)
+        # decoder with reference
+        if self.reference is not None:
+            images, labels, reference_images, reference_labels  = batch
+            if self.delta:
+                labels = labels - reference_labels
 
-        # decide input and target based on model type
-        if "encoder" in self.model_type:
-            outputs = self.model(images)
-            loss = self.loss_fn(outputs, labels[:,self.dimensions_to_learn])
-
-            if verbose:
-                print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
-                print(f"Ground truth: x={labels[0,0]:.2f}")#, z={labels[0,2]:.2f}")
-        
-        elif "decoder" in self.model_type:
-            outputs = self.model(labels[:,self.dimensions_to_learn])
+            outputs = self.model(reference_images, labels[:,self.dimensions_to_learn])
             loss = self.loss_fn(outputs, images)
 
-            # TODO: if verbose plot reconstructed image vs input image
         else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
+            images, labels = batch
+            # images = images.to(DEVICE) done implicitly by accelerator
+            # labels = labels.to(DEVICE)
+
+            # decide input and target based on model type
+            if "encoder" in self.model_type:
+                outputs = self.model(images)
+                loss = self.loss_fn(outputs, labels[:,self.dimensions_to_learn])
+
+                if verbose:
+                    print(f"\nPredictions: x={outputs[0,0]:.2f}")#, z={outputs[0,1]:.2f}")
+                    print(f"Ground truth: x={labels[0,0]:.2f}")#, z={labels[0,2]:.2f}")
+            
+            elif "decoder" in self.model_type:
+                outputs = self.model(labels[:,self.dimensions_to_learn])
+                loss = self.loss_fn(outputs, images)
+
+                # TODO: if verbose plot reconstructed image vs input image
+            else:
+                raise ValueError(f"Unknown model type: {self.model_type}")
         
         return outputs, loss
 
@@ -165,7 +185,7 @@ class Trainer:
             # training
             self.model.train()
             running_loss = 0.0
-            for i, batch in enumerate(train_loader):
+            for i, batch in tqdm(enumerate(train_loader), desc="Training", total=len(train_loader)):
                 loss = self._train_step(batch)
                 running_loss += loss.item() 
 
@@ -185,7 +205,7 @@ class Trainer:
             if val_loader is not None:
                 self.model.eval()
                 running_loss = 0.0
-                for i, batch in enumerate(val_loader):
+                for i, batch in tqdm(enumerate(val_loader), desc="Validation", total=len(val_loader)):
                     loss = self._val_step(batch, verbose=i==len(val_loader)-1)
                     running_loss += loss.item()
 
@@ -223,7 +243,7 @@ class Trainer:
         mins, secs = divmod(secs, 60)
         self.logger.print(f"Training finished"\
                           f"\n\t- time = {int(hrs)}h {int(mins)}m {int(secs)}s"\
-                          f"\n\t- best validation {self.loss_type} loss = {early_stopping.best_loss:.4f}" if early_stopping is not None else "")
+                          f"\n\t- best validation {self.loss_type} loss = {early_stopping.best_loss:.4f}" if val_loader and early_stopping_enabled else "")
         self.logger.flush()
         writer.flush()
         writer.close()

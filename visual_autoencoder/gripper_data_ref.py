@@ -27,7 +27,7 @@ with
     - 1 or more between ["Bottom_images","Images", "Top_masked_images", "Top_masks"]
 - States (states.json)
 """
-class GripperDataset(Dataset):
+class GripperDatasetReference(Dataset):
     def __init__(self, 
                  abs_path=None, 
                  experiment=None, 
@@ -113,7 +113,7 @@ class GripperDataset(Dataset):
         self.reference_images = {}
         for image_type in images_to_load:
                 self.reference_images[image_type] = [self.images[image_type][0]] * len(self.images[image_type])
-        self.reference_states_tensor = self.states_tensor[[0]].repeat(len(self.images), 1)
+        self.reference_states_tensor = self.states_tensor[[0]].repeat(len(self.states), 1)
 
     def select_reference_indices(self, N=20, normalize=False, random_state=42):
         """
@@ -371,10 +371,10 @@ def plot_image(image, title=None, ax=None, fontsize=14, cmap=None):
     plt.show()
 
 
-def compute_mean_image(dataset: GripperDataset, name=None):
+def compute_mean_image(dataset: GripperDatasetReference, name=None):
     """
     Args:
-        dataset (GripperDataset)
+        dataset (GripperDatasetReference)
     
     Returns:
         mean_image (np.array): mean of images

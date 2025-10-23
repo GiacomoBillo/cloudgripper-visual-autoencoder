@@ -5,6 +5,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from gripper_data import GripperDataset
+from gripper_data_ref import GripperDatasetReference
+
 
 def subsample_dataset(dataset: Dataset, length=None, fraction=None):
     if length is not None:
@@ -21,7 +23,7 @@ def subsample_dataset(dataset: Dataset, length=None, fraction=None):
     return subset
 
 
-def get_data(config, logger=None):
+def get_data(config, logger=None, load_reference=False):
     # Preprocessing transforms
     top_img_shape = config["data"]["top_img_shape"] # original image shape
     resize_factor = config["data"]["resize_factor"] 
@@ -35,10 +37,14 @@ def get_data(config, logger=None):
     batch_size = config["training"]["batch_size"]
     # sessions = np.arange(1,21) # sessions to load
     path = config["data"]["dataset_path"] # experiment path
-    dataset = GripperDataset(abs_path=path, 
-                            #  sessions=sessions, 
-                             transform=preprocess,
-                             images_to_load=config["data"]["images_to_load"])        
+    if load_reference:
+        dataset = GripperDatasetReference(abs_path=path, 
+                                 transform=preprocess,
+                                 images_to_load=config["data"]["images_to_load"])
+    else:
+        dataset = GripperDataset(abs_path=path, 
+                                transform=preprocess,
+                                images_to_load=config["data"]["images_to_load"])        
 
     torch.manual_seed(6) # for reproducibility
     split = config["data"]["split"] # train, val, test
@@ -47,7 +53,7 @@ def get_data(config, logger=None):
     val_dataset_used = subsample_dataset(val_dataset, length=config["data"]["val_fraction_used"])
 
     # DataLoaders
-    num_workers = config["data"]["num_workers"]
+    num_workers = config["data"].get("num_workers", 0)
     train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
                             shuffle=True,
