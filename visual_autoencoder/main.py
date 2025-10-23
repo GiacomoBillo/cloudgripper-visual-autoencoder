@@ -29,44 +29,44 @@ if __name__ == "__main__":
     accelerator = Accelerator()
 
     model_type = config["model"]["type"]
-    if model_type == "encoder":
+    model_architecture = config["model"]["architecture"]
+
+    # -- Create model --
+    if model_architecture == "ConvolutionalEncoder":
         # create encoder
         model = ConvolutionalEncoder(
             config=config,
             accelerator=accelerator,
         )
         model.summary(input_size=(1, 3, *image_shape))
-    elif model_type == "decoder":
-        # create decoder
+        
+    elif model_architecture == "FourierMlpDecoder":
         # model = ConvolutionalDecoder(
         #     config=config,
         #     accelerator=accelerator,
         # )
-        # model = FourierMlpDecoder(
-        #     config=config,
-        #     accelerator=accelerator,
-        # )
-        # model.summary(input_size=(1, len(config["model"]["dimensions_to_learn"])))
+        model = FourierMlpDecoder(
+            config=config,
+            accelerator=accelerator,
+        )
+        model.summary(input_size=(1, len(config["model"]["dimensions_to_learn"])))
 
+    elif model_architecture == "UNetWithFiLM":
         model = UNetWithFiLM(
             config=config, 
             accelerator=accelerator,
         )
         model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
-    """
-    # dimension example with random input
-    x = torch.randn((1, 3, 720//8, 1280//8)).to(DEVICE)
-    print("Input shape:", x.shape)
-    output = model(x)
-    print("Output shape:", output.shape)  # should be [1, 5]
-    """
 
-    # dataset and loaders
+    else:
+        raise ValueError(f"Unknown model architecture: {model_architecture}")
+
+    # -- Dataset and loaders --
     config["data"]["num_workers"] = int(os.getenv("NUM_WORKERS", 0)) # set num_workers from .env, default 0
     load_reference = type(model).__name__ in ARCHITECTURES_WITH_REFERENCE  # load reference data for certain architectures
     train_loader, val_loader, test_loader = get_data(config, logger=model.logger, load_reference=load_reference)
 
-    # train model
+    # -- Train model --
     trainer = Trainer(model, config)
     trainer.train_model(train_loader, 
                         val_loader=val_loader if config["training"]["validation"] else None, # early stopping if val_loader is provided
