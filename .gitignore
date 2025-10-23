@@ -40,4 +40,8 @@ train*.json
 val*.json
 visual_autoencoder/trained_models/*
 
+# configuration
+visual_autoencoder/config.yaml
+
 .vscode/*
+
