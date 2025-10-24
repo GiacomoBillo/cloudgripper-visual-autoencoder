@@ -12,7 +12,6 @@ from sklearn.cluster import KMeans
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-csv_path = "dataset/states.csv"
 import re
 
 def natural_sort_key(s):
@@ -34,7 +33,7 @@ class GripperDatasetReference(Dataset):
                  sessions=None,
                  transform=None,
                  images_to_load=["Bottom_images","Images"],
-                 verbose=False
+                 verbose=False,
                  ):
         # get dataset from absolute path or default path and experiment name
         if abs_path is not None:
@@ -107,13 +106,16 @@ class GripperDatasetReference(Dataset):
         # self.states_tensor = torch.tensor(df.iloc[:, 1:6].values, dtype=torch.float32)
         df = pd.DataFrame(self.states)
         self.states_tensor = torch.tensor(df.iloc[:, 0:5].values, dtype=torch.float32)
+        self.states_tensor[:,3] = self.states_tensor[:,3] / 180 # normalize rotation angle
 
         
         # --- Initially, use the first image as reference for all ---
+        self.num_references = 1
         self.reference_images = {}
         for image_type in images_to_load:
                 self.reference_images[image_type] = [self.images[image_type][0]] * len(self.images[image_type])
         self.reference_states_tensor = self.states_tensor[[0]].repeat(len(self.states), 1)
+
 
     def select_reference_indices(self, N=20, normalize=False, random_state=42):
         """
@@ -151,35 +153,38 @@ class GripperDatasetReference(Dataset):
                 continue
             dists = np.linalg.norm(cluster_data - centers[i], axis=1)
             ref_indices.append(cluster_points[np.argmin(dists)])
+        ref_indices = np.array(ref_indices)
 
         print(f"Selected {len(ref_indices)} reference indices.")
         return ref_indices, centers
 
-    def set_references(self, reference_indices = None):
+    def set_references(self, reference_indices = None, num_references=1):
         """
         Given a list of indices (in dataset order) corresponding to reference images,
         assign each sample the *nearest* reference by Euclidean distance in config space.
         """
+        self.num_references = num_references
         if reference_indices is None:
-            ref_indices,_ = self.select_reference_indices(N=1)
-            print(f"Automatically selected reference index: {ref_indices}")
+            ref_indices,_ = self.select_reference_indices(N=num_references)
+            print(f"Automatically selected reference index: {ref_indices.tolist()}")
         else:
             ref_indices = np.array(reference_indices, dtype=torch.long)
-        ref_states = self.states_tensor[ref_indices]
+        self.ref_indices = ref_indices
+        self.ref_states = self.states_tensor[ref_indices]
         ref_indices = torch.tensor(ref_indices, dtype=torch.long)
         ref_indices_np = ref_indices.numpy()
 
         # Compute nearest reference index for each image
         # Efficient vectorized computation
         # states: [N, 5], ref_states: [R, 5]
-        diffs = self.states_tensor.unsqueeze(1) - ref_states.unsqueeze(0)
+        diffs = self.states_tensor.unsqueeze(1) - self.ref_states.unsqueeze(0)
         dists = torch.norm(diffs, dim=2)
         nearest_ref = torch.argmin(dists, dim=1).cpu().numpy()
 
         # Assign references
         for image_type in self.images_to_load:
             self.reference_images[image_type] = [self.images[image_type][i.item()] for i in ref_indices_np[nearest_ref]]
-        self.reference_states_tensor = ref_states[nearest_ref]
+        self.reference_states_tensor = self.ref_states[nearest_ref]
 
 
     def __len__(self):  
@@ -247,6 +252,31 @@ class GripperDatasetReference(Dataset):
         reference_states = self.reference_states_tensor[index]
 
         return (*ordered_list_of_images, state_values, *ordered_list_of_reference_images, reference_states)
+    
+
+    def get_references(self):
+        """
+        Returns:
+            reference images and reference states as Tensors
+        """
+        reference_images = {}
+        for image_type in self.images_to_load:
+            # Collect all images for the given indices
+            ref_image_paths = [self.reference_images[image_type][i] for i in self.ref_indices]
+
+            # Load and transform all reference images
+            reference_images[image_type] = torch.stack([
+                self.load_tensor_or_image(p) for p in ref_image_paths
+            ])
+        
+        # Collect corresponding reference states
+        reference_states = self.reference_states_tensor[self.ref_indices]
+
+        # Keep consistent ordering across image types
+        ordered_list_of_reference_images = [reference_images[image_type] for image_type in self.images_to_load]
+
+        return *ordered_list_of_reference_images, reference_states
+
     
 
 def load_states(states_path):

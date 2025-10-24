@@ -38,9 +38,12 @@ def get_data(config, logger=None, load_reference=False):
     # sessions = np.arange(1,21) # sessions to load
     path = config["data"]["dataset_path"] # experiment path
     if load_reference:
+        num_references = config["model"].get("num_references", 1)
         dataset = GripperDatasetReference(abs_path=path, 
                                  transform=preprocess,
                                  images_to_load=config["data"]["images_to_load"])
+        dataset.set_references(num_references=num_references) # number of reference images
+
     else:
         dataset = GripperDataset(abs_path=path, 
                                 transform=preprocess,
@@ -70,6 +73,8 @@ def get_data(config, logger=None, load_reference=False):
         logger.print(f"Len train dataset: {len(train_dataset_used)}, "
                     f"Len val dataset: {len(val_dataset_used)}")
         logger.print(f"Resizing images from {top_img_shape} to {resize_shape}")
+        if load_reference:
+            logger.print(f"Using {config['model'].get('num_references', 1)} reference images.")
 
     return train_loader, val_loader, test_loader
 
