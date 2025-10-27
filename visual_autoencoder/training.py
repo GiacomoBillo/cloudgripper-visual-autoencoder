@@ -11,6 +11,14 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPI
 from accelerate.utils import broadcast
 
 
+ENCODERS = {
+    "ConvolutionalEncoder",
+}
+DECODERS = {
+    "ConvolutionalDecoder",
+    "FourierMlpDecoder",
+    "UNetWithFiLM",
+}
 ARCHITECTURES_WITH_REFERENCE = [
                                 "UNetWithFiLM",
                                  ]
@@ -46,7 +54,7 @@ class Trainer:
         else:
             raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
-        # loss function
+        # loss function for training
         self.loss_type = config["training"]["loss_function"]
         if self.loss_type is None or self.loss_type == "MSE":
             self.loss_fn = torch.nn.MSELoss() 
@@ -64,20 +72,17 @@ class Trainer:
         lpips_loss_fn_base = LPIPSLoss(net_type="vgg", normalize=True)
         def lpips_loss_fn(output, images):
             return lpips_loss_fn_base(output.clamp(0,1), images)
-        self.eval_loss_functions = {
+        if self.model.__class__.__name__ in DECODERS:
+            self.eval_loss_functions = {
                 "MSE": torch.nn.MSELoss(),
                 "LPIPS": lpips_loss_fn
             }
-        # TODO:
-        # if "decoder" in self.model_type:
-        #     self.eval_loss_functions = {
-        #         "MSE": torch.nn.MSELoss(),
-        #         "LPIPS": lpips_loss_fn
-        #     }
-        # elif "encoder" in self.model_type:
-        #     self.eval_loss_functions = {
-        #         "MSE": torch.nn.MSELoss()
-        #     }
+        elif self.model.__class__.__name__ in ENCODERS:
+            self.eval_loss_functions = {
+                "MSE": torch.nn.MSELoss()
+            }
+        else:
+            raise ValueError(f"Unknown model architecture: {self.model.__class__.__name__}")
 
 
     def _inference_step(self, batch, verbose=False):
@@ -442,24 +447,25 @@ class Trainer:
 
         return outputs, losses
 
-    def evaluate_model(self, test_loader: DataLoader, verbose=True):        
-        test_loader, self.model, self.optimizer, mse_loss_fn, lpips_loss_fn = self.accelerator.prepare(test_loader, self.model, self.optimizer, mse_loss_fn, lpips_loss_fn)
+    def evaluate_model(self, test_loader: DataLoader, verbose=True):  
+        self.model.eval()      
+        test_loader, self.model, self.optimizer = self.accelerator.prepare(test_loader, self.model, self.optimizer)
 
-        self.model.eval()
         running_losses = {}
         for key in self.eval_loss_functions.keys():
             running_losses[key] = 0.0
+            self.eval_loss_functions[key] = self.accelerator.prepare(self.eval_loss_functions[key])
 
         for batch in tqdm(test_loader, desc="Testing", total=len(test_loader), leave=False):
-            outputs, losses =self.evaluation_step(batch, verbose=False)
-            for key, loss in losses.items():
-                running_losses[key] += loss
+            outputs, losses = self.evaluation_step(batch, verbose=False)
+            for key, loss in running_losses.items():
+                running_losses[key] += losses[key]
 
         # average losses
         losses = {}
         for key in self.eval_loss_functions.keys():
             losses[key] = running_losses[key] / len(test_loader)
-        losses["RMSE"] = np.sqrt(running_losses["MSE"]) # add RMSE
+        losses["RMSE"] = np.sqrt(losses["MSE"]) # add RMSE
 
         if verbose:
             for key, loss in losses.items():
