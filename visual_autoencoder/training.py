@@ -60,6 +60,25 @@ class Trainer:
         else:
             raise ValueError(f"Unknown loss function type: {self.loss_type}, for model type: {self.model_type}")
 
+        # loss functions for evaluation
+        lpips_loss_fn_base = LPIPSLoss(net_type="vgg", normalize=True)
+        def lpips_loss_fn(output, images):
+            return lpips_loss_fn_base(output.clamp(0,1), images)
+        self.eval_loss_functions = {
+                "MSE": torch.nn.MSELoss(),
+                "LPIPS": lpips_loss_fn
+            }
+        # TODO:
+        # if "decoder" in self.model_type:
+        #     self.eval_loss_functions = {
+        #         "MSE": torch.nn.MSELoss(),
+        #         "LPIPS": lpips_loss_fn
+        #     }
+        # elif "encoder" in self.model_type:
+        #     self.eval_loss_functions = {
+        #         "MSE": torch.nn.MSELoss()
+        #     }
+
 
     def _inference_step(self, batch, verbose=False):
         # decoder with reference
@@ -380,3 +399,70 @@ class Trainer:
         filename = os.path.join(self.model_path, f'{curve_name}_curve.json')
         with open(filename, "w") as file:
             json.dump(losses, file)
+
+
+    def evaluation_step(self, batch, verbose=False):
+        losses = {}
+
+        with torch.no_grad():
+            # decoder with reference
+            if self.reference is not None:
+                images, labels, reference_images, reference_labels  = batch
+                if self.delta:
+                    labels = labels - reference_labels
+
+                outputs = self.model(reference_images, labels[:,self.dimensions_to_learn])
+                for key, loss_fn in self.eval_loss_functions.items():
+                    loss = loss_fn(outputs, images)
+                    losses[key] = loss.item()
+
+            else:
+                images, labels = batch
+
+                # decide input and target based on model type
+                if "encoder" in self.model_type:
+                    outputs = self.model(images)
+                    for key, loss_fn in self.eval_loss_functions.items():
+                        loss = loss_fn(outputs, labels[:,self.dimensions_to_learn])
+                        losses[key] = loss.item()
+
+                elif "decoder" in self.model_type:
+                    outputs = self.model(labels[:,self.dimensions_to_learn])
+                    for key, loss_fn in self.eval_loss_functions.items():
+                        loss = loss_fn(outputs, images)
+                        losses[key] = loss.item()
+
+                else:
+                    raise ValueError(f"Unknown model type: {self.model_type}")
+                
+        losses["RMSE"] = np.sqrt(losses["MSE"])  # add RMSE
+        if verbose:
+            for key, loss in losses.items():
+                print(f"{key} loss: {loss:.4f}")
+
+        return outputs, losses
+
+    def evaluate_model(self, test_loader: DataLoader, verbose=True):        
+        test_loader, self.model, self.optimizer, mse_loss_fn, lpips_loss_fn = self.accelerator.prepare(test_loader, self.model, self.optimizer, mse_loss_fn, lpips_loss_fn)
+
+        self.model.eval()
+        running_losses = {}
+        for key in self.eval_loss_functions.keys():
+            running_losses[key] = 0.0
+
+        for batch in tqdm(test_loader, desc="Testing", total=len(test_loader), leave=False):
+            outputs, losses =self.evaluation_step(batch, verbose=False)
+            for key, loss in losses.items():
+                running_losses[key] += loss
+
+        # average losses
+        losses = {}
+        for key in self.eval_loss_functions.keys():
+            losses[key] = running_losses[key] / len(test_loader)
+        losses["RMSE"] = np.sqrt(running_losses["MSE"]) # add RMSE
+
+        if verbose:
+            for key, loss in losses.items():
+                print(f"{key} loss: {loss:.4f}")
+        
+        return losses
