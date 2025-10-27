@@ -22,8 +22,17 @@ def subsample_dataset(dataset: Dataset, length=None, fraction=None):
     subset = torch.utils.data.Subset(dataset, indices_subset)
     return subset
 
+def split_dataset(dataset: Dataset, split: list):
+    assert sum(split) == len(dataset)
+    
+    prev = 0
+    subsets = []
+    for s in split:
+        subsets.append(torch.utils.data.Subset(dataset, list(range(prev, prev + s))))
+        prev += s
+    return subsets
 
-def get_data(config, logger=None, load_reference=False):
+def get_data(config, logger=None, load_reference=False, verbose=False):
     # Preprocessing transforms
     top_img_shape = config["data"]["top_img_shape"] # original image shape
     resize_factor = config["data"]["resize_factor"] 
@@ -75,6 +84,13 @@ def get_data(config, logger=None, load_reference=False):
         logger.print(f"Resizing images from {top_img_shape} to {resize_shape}")
         if load_reference:
             logger.print(f"Using {config['model'].get('num_references', 1)} reference images.")
+    elif verbose:
+        print(f"\n\nTotal dataset size: {len(dataset)}")
+        print(f"Len train dataset: {len(train_dataset_used)}, "
+                    f"Len val dataset: {len(val_dataset_used)}")
+        print(f"Resizing images from {top_img_shape} to {resize_shape}")
+        if load_reference:
+            print(f"Using {config['model'].get('num_references', 1)} reference images.")
 
     return train_loader, val_loader, test_loader
 

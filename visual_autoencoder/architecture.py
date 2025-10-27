@@ -69,11 +69,13 @@ class BaseArchitecture(nn.Module, ABC):
         torch.save(self.state_dict(), os.path.join(self.model_path, "model.pth"))
     
     # load model non-accelerated
-    def load_model(self):
-        if not os.path.exists(os.path.join(self.model_path, "model.pth")):
-            raise FileNotFoundError(f"No model file found in {self.model_path}")
+    def load_model(self, model_path=None):
+        if model_path is None:
+            model_path = self.model_path
+        if not os.path.exists(os.path.join(model_path, "model.pth")):
+            raise FileNotFoundError(f"No model file found in {model_path}")
         self.load_state_dict(
-            torch.load(os.path.join(self.model_path, "model.pth"), 
+            torch.load(os.path.join(model_path, "model.pth"), 
             map_location=self.device))
 
     def save_config(self):
@@ -144,13 +146,15 @@ class AcceleratedArchitecture(BaseArchitecture, ABC):
                                     safe_serialization=True)
     
     # load accelerated model
-    def load_model(self):
+    def load_model(self, model_path=None):
+        if model_path is None:
+            model_path = os.path.join(self.model_path)
         if self.accelerator is None:
-            super().load_model()
+            super().load_model(model_path)
             return
         # load accelerated model
         load_checkpoint_in_model(self, 
-                                 os.path.join(self.model_path), 
+                                 model_path, 
                                  # device_map={"":self.device} # not working?
                                  )
 
