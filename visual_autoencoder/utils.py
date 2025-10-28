@@ -69,13 +69,22 @@ def get_data(config, logger=None, load_reference=False, verbose=False):
     train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
                             shuffle=True,
-                            num_workers=num_workers)
+                            num_workers=num_workers,
+                            pin_memory=torch.cuda.is_available(),
+                            persistent_workers=True,
+                            )
     val_loader = DataLoader(val_dataset_used,
                             batch_size=batch_size,
-                            num_workers=num_workers)
+                            num_workers=num_workers,
+                            pin_memory=torch.cuda.is_available(),
+                            persistent_workers=True,
+                            )
     test_loader = DataLoader(test_dataset,
                             batch_size=batch_size,
-                            num_workers=num_workers)
+                            num_workers=num_workers,
+                            pin_memory=torch.cuda.is_available(),
+                            persistent_workers=True,
+                            )
 
     if logger:
         logger.print(f"\n\nTotal dataset size: {len(dataset)}")
