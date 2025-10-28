@@ -409,6 +409,7 @@ class Trainer:
     def evaluation_step(self, batch, verbose=False):
         losses = {}
 
+        self.model.eval()
         with torch.no_grad():
             # decoder with reference
             if self.reference is not None:
@@ -472,3 +473,72 @@ class Trainer:
                 print(f"{key} loss: {loss:.4f}")
         
         return losses
+
+
+    def encode_with_decoder(self, 
+                            image, 
+                            encoder=None, # encoder for initializing latent space config, otherwise random
+                            references=None, # reference images for architectures with reference
+                            threshold=0.001, 
+                            max_iterations=100, 
+                            verbose=False):
+        """
+        Generate images reconstructions with the decoder
+        until the distance (LPIPS) between the input image and the reconstruction is below a certain threshold
+        by searching the latent space with GD
+        """
+        if self.model.__class__.__name__ in DECODERS:
+            raise ValueError("The model must be a decoder to use this method.")
+
+        image = image.unsqueeze(0).to(self.accelerator.device)
+
+        # Initialize latent/config vector (requires_grad=True for optimization) with encoder or random
+        if encoder is not None:
+            encoder.eval()
+            with torch.no_grad():
+                latent = encoder(image)
+                latent.requires_grad = True
+        else:
+            latent = torch.randn(1, len(self.dimensions_to_learn),
+                                    device=self.accelerator.device,
+                                    requires_grad=True
+                                )
+        if verbose:
+            print(f"Starting encoding with decoder, initial guess: {latent}")
+
+        optimizer = torch.optim.Adam([latent])
+        best_latent = latent.clone().detach()
+        best_loss = float("inf")
+        last_distance = None
+
+        for i in range(max_iterations):
+            if self.model.__class__.__name__ in ARCHITECTURES_WITH_REFERENCE:
+                if references is None:
+                    raise ValueError("Reference images must be provided for architectures with reference.")
+                
+                # select closest reference 
+                closest_ref_img_idx = torch.min([self.eval_loss_functions["LPIPS"](ref_img, image) for ref_img in references])
+                closest_ref_img = references[closest_ref_img_idx].unsqueeze(0)
+                reconstructed_image = self.model(closest_ref_img, latent)
+            else:
+                reconstructed_image = self.model(latent)
+            lpips_distance = self.eval_loss_functions["LPIPS"](reconstructed_image.clamp(0,1), image)
+
+            optimizer.zero_grad()
+            lpips_distance.backward()
+            optimizer.step()
+
+            if lpips_distance.item() < best_loss:
+                best_loss = lpips_distance.item()
+                best_latent = latent.clone().detach()
+
+            if last_distance is not None and abs(last_distance - lpips_distance.item()) < threshold:
+                if verbose:
+                    print(f"Converged after {i+1} iterations, LPIPS={lpips_distance.item():.4f})")
+                break
+            last_distance = lpips_distance.item()
+
+        if verbose and lpips_distance.item() >= threshold:
+            print(f"Did not converge after {max_iterations} iterations, final best LPIPS={best_loss:.4f}")
+        return best_latent, best_loss
+
