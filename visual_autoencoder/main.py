@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # import architectures
 from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMlpDecoder
-from conditioned_UNet import UNetWithFiLM
+from conditioned_UNet import UNetWithFiLM, UNetWithFiLMAndEnv
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,6 +57,13 @@ if __name__ == "__main__":
             accelerator=accelerator,
         )
         model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
+
+    elif model_architecture == "UNetWithFiLMAndEnv":
+        model = UNetWithFiLMAndEnv(
+            config=config, 
+            accelerator=accelerator,
+        )
+        model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"])), (1, len(config["model"]["environmental_variables"]))])
 
     else:
         raise ValueError(f"Unknown model architecture: {model_architecture}")

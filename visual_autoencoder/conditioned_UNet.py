@@ -249,6 +249,68 @@ class UNetWithFiLM(AcceleratedArchitecture):
         return out
     
 
+class UNetWithFiLMAndEnv(UNetWithFiLM):
+    """
+    UNet that takes as input the reference image and the background image,
+    the 5D robot configuration is injected at each step via FILM layers,
+    and outputs the reconstructed image.
+    """
+    def __init__(self,
+                 model_name=None, 
+                 config=None,
+                 load_model=False,
+                 accelerator: Accelerator=None,
+                 in_channels: int = 6,  # ref + background
+                 config_dim: int = 5,
+                 base_channels: int = 4,
+                 num_downs: int = 4,
+                 groups: int = 8,
+                 hidden_dim_mlp: int = 256,
+                 out_channels: int = 3,
+                 ) -> None:
+        super().__init__(model_name, config, load_model, accelerator,
+                         in_channels, config_dim, base_channels,
+                         num_downs, groups, hidden_dim_mlp, out_channels)
+
+        self.image_shape = [x//config["data"]["resize_factor"] for x in config["data"]["top_img_shape"]] # [height, width]
+
+        # load background/mean image
+        self.background_image = self.load_background_image()
+
+    def load_background_image(self):
+        # Implement loading of background image
+        background_image_path = os.getenv("BACKGROUND_IMAGE_PATH")
+        if background_image_path is None:
+            raise ValueError("BACKGROUND_IMAGE_PATH not set in environment variables.")
+        if not os.path.exists(background_image_path):
+            raise FileNotFoundError(f"Background image not found at {background_image_path}")
+        
+        import cv2
+        from gripper_data import transpose_channels_first
+        from torchvision.transforms import Resize
+        import numpy as np
+        background_image = cv2.imread(background_image_path)
+        background_image = cv2.cvtColor(background_image, cv2.COLOR_BGR2RGB)  # convert BGR to RGB
+        background_image = transpose_channels_first(background_image) # move RGB channels to the first dimension
+        if background_image.dtype == np.uint8:
+            background_image = background_image.astype(np.float32) / 255.0  # normalize to [0, 1]
+        background_image = torch.tensor(background_image, device=self.accelerator.device).unsqueeze(0)  # [1, C, H, W]        
+        background_image = Resize(self.image_shape)(background_image)  # downscale if needed
+        return background_image
+
+    def forward(self, ref_img: torch.Tensor, config: torch.Tensor) -> torch.Tensor:
+        """
+        ref_img: [B, C, H, W]
+        config: [B, config_dim]
+        returns: [B, out_channels, H, W]
+        """
+        # concatenate background to ref_img along channels
+        B, C, H, W = ref_img.shape
+        background = self.background_image.expand(B, -1, -1, -1)  # expand to batch size
+        ref_img_and_background = torch.cat([ref_img, background], dim=1)  # [B, C + C_bg, H, W]
+
+        return super().forward(ref_img_and_background, config)
+
 
 if __name__ == "__main__":
     # load configurations from config.yaml
@@ -264,12 +326,24 @@ if __name__ == "__main__":
     accelerator = Accelerator()
 
 
-    model = UNetWithFiLM(
-        config=config, 
+    # model = UNetWithFiLM(
+    #     config=config, 
+    #     accelerator=accelerator,
+    # )
+    model = UNetWithFiLMAndEnv(
+        config=config,
         accelerator=accelerator,
+        in_channels=6,  # ref + background
     )
     model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
 
+    print(f"shape background_image: {model.background_image.shape}")
+    # plot
+    import matplotlib.pyplot as plt
+    bg_img = model.background_image.squeeze(0).permute(1, 2, 0).cpu().numpy()  # [H, W, C]
+    plt.imshow(bg_img)
+    plt.axis("off")
+    plt.show()
 
     # dataset and loaders
     config["data"]["num_workers"] = int(os.getenv("NUM_WORKERS", 0)) # set num_workers from .env, default 0

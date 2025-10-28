@@ -18,10 +18,12 @@ DECODERS = {
     "ConvolutionalDecoder",
     "FourierMlpDecoder",
     "UNetWithFiLM",
+    "UNetWithFiLMAndEnv"
 }
-ARCHITECTURES_WITH_REFERENCE = [
+ARCHITECTURES_WITH_REFERENCE = {
                                 "UNetWithFiLM",
-                                 ]
+                                "UNetWithFiLMAndEnv"
+                                 }
 
 
 class Trainer:
