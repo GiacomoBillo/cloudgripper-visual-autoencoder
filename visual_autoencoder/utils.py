@@ -47,11 +47,19 @@ def get_data(config, logger=None, load_reference=False, verbose=False):
     # sessions = np.arange(1,21) # sessions to load
     path = config["data"]["dataset_path"] # experiment path
     if load_reference:
-        num_references = config["model"].get("num_references", 1)
+        references = config["model"].get("references", 1)
         dataset = GripperDatasetReference(abs_path=path, 
                                  transform=preprocess,
                                  images_to_load=config["data"]["images_to_load"])
-        dataset.set_references(num_references=num_references) # number of reference images
+        
+        if isinstance(references, int):
+            num_references = references
+            dataset.set_references(num_references=num_references) # number of reference images
+        elif isinstance(references, list):
+            grid_for_references = references
+            dataset.set_references(grid_dimensions=grid_for_references)
+        else:
+            raise ValueError("References must be int or list")
 
     else:
         dataset = GripperDataset(abs_path=path, 

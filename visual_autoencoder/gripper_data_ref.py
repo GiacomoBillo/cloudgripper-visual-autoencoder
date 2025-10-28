@@ -9,6 +9,8 @@ import json
 from tqdm import tqdm
 import pandas as pd
 from sklearn.cluster import KMeans
+import itertools
+
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -117,7 +119,7 @@ class GripperDatasetReference(Dataset):
         self.reference_states_tensor = self.states_tensor[[0]].repeat(len(self.states), 1)
 
 
-    def select_reference_indices(self, N=20, normalize=False, random_state=42):
+    def select_references_with_clustering(self, N=20, normalize=False, random_state=42):
         """
         Selects N representative reference configurations from a CSV file of robot states.
 
@@ -157,17 +159,48 @@ class GripperDatasetReference(Dataset):
 
         print(f"Selected {len(ref_indices)} reference indices.")
         return ref_indices, centers
+    
+    def select_references_from_grid(self, grid_dimensions):
+        """
+        Select references images and configurations states from a grid in configuration space
+        for each grid cell, select the closest image to the center of the cell as reference
+        """
+        states = self.states_tensor.numpy()
 
-    def set_references(self, reference_indices = None, num_references=1):
+        # centers for each dimension
+        centers_dims = [(np.arange(n) + 0.5) / n for n in grid_dimensions]
+        grid_centers = np.array(list(itertools.product(*centers_dims)))
+
+        ref_indices = []
+        for point in grid_centers:
+            diffs = states - point
+            dists = np.linalg.norm(diffs, axis=1)
+            nearest_index = np.argmin(dists)
+            ref_indices.append(nearest_index)
+        ref_indices = np.array(ref_indices)
+        print(f"Selected {len(ref_indices)} reference indices from grid.")
+        return ref_indices
+
+    def set_references(self, reference_indices = None, num_references=1, grid_dimensions=None):
         """
         Given a list of indices (in dataset order) corresponding to reference images,
         assign each sample the *nearest* reference by Euclidean distance in config space.
         """
-        self.num_references = num_references
+        
         if reference_indices is None:
-            ref_indices,_ = self.select_reference_indices(N=num_references)
-            print(f"Automatically selected reference index: {ref_indices.tolist()}")
+            # select references close to the centers of the grid cells
+            if grid_dimensions is not None:
+                self.num_references = np.prod(grid_dimensions)
+                ref_indices = self.select_references_from_grid(grid_dimensions)
+                print(f"Selected reference indeces from grid: {ref_indices.tolist()}")
+            # select references with k-means clustering
+            else:
+                self.num_references = num_references
+                ref_indices,_ = self.select_references_with_clustering(N=num_references)
+                print(f"Automatically selected reference indeces with K-means clustering: {ref_indices.tolist()}")
+        # reference indices provided
         else:
+            self.num_references = num_references
             ref_indices = np.array(reference_indices, dtype=torch.long)
         self.ref_indices = ref_indices
         self.ref_states = self.states_tensor[ref_indices]
