@@ -63,7 +63,7 @@ if __name__ == "__main__":
             config=config, 
             accelerator=accelerator,
         )
-        model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"])), (1, len(config["model"]["environmental_variables"]))])
+        model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
 
     else:
         raise ValueError(f"Unknown model architecture: {model_architecture}")
