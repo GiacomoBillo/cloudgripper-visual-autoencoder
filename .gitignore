@@ -38,7 +38,7 @@ data backups
 events.out.tfevents.*
 train*.json
 val*.json
-visual_autoencoder/trained_models/*
+visual_autoencoder/trained_models*/*
 
 # configuration
 visual_autoencoder/config.yaml
