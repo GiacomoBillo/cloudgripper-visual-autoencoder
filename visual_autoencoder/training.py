@@ -10,6 +10,8 @@ import time
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPSLoss
 from accelerate.utils import broadcast
 
+from gripper_data_ref import GripperDatasetReference
+
 
 ENCODERS = {
     "ConvolutionalEncoder",
@@ -178,6 +180,15 @@ class Trainer:
                     epochs=20, 
                     patience=10):
         
+        # save indices of reference images
+        if self.reference:
+            self.logger.print(f"Indices of reference images: {train_loader.dataset.dataset.dataset.ref_indices.tolist()}")
+            # save to file
+            ref_indices_file = os.path.join(self.model_path, "reference_indices.json")
+            with open(ref_indices_file, "w") as f:
+                json.dump(train_loader.dataset.dataset.dataset.ref_indices.tolist(), f)
+            self.logger.print(f"Reference indices saved to file {ref_indices_file}\n")
+
         if self.accelerator.num_processes > 1:
             self.logger.print(f"Using {self.accelerator.num_processes} processes for training.")
             self._train_distributed_model(train_loader, val_loader, early_stopping_enabled, epochs, patience)

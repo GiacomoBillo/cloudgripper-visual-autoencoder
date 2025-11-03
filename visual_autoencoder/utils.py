@@ -100,14 +100,14 @@ def get_data(config, logger=None, load_reference=False, verbose=False):
                     f"Len val dataset: {len(val_dataset_used)}")
         logger.print(f"Resizing images from {top_img_shape} to {resize_shape}")
         if load_reference:
-            logger.print(f"Using {config['model'].get('num_references', 1)} reference images.")
+            logger.print(f"Using {dataset.num_references} reference images.")
     elif verbose:
         print(f"\n\nTotal dataset size: {len(dataset)}")
         print(f"Len train dataset: {len(train_dataset_used)}, "
                     f"Len val dataset: {len(val_dataset_used)}")
         print(f"Resizing images from {top_img_shape} to {resize_shape}")
         if load_reference:
-            print(f"Using {config['model'].get('num_references', 1)} reference images.")
+            print(f"Using {dataset.num_references} reference images.")
 
     return train_loader, val_loader, test_loader
 
