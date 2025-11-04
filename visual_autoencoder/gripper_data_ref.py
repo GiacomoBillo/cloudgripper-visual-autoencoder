@@ -119,7 +119,7 @@ class GripperDatasetReference(Dataset):
         self.reference_states_tensor = self.states_tensor[[0]].repeat(len(self.states), 1)
 
 
-    def select_references_with_clustering(self, N=20, normalize=False, random_state=42):
+    def select_references_with_clustering(self, N=20, normalize=False, clustering_dim_weights=None, random_state=42, print=print):
         """
         Selects N representative reference configurations from a CSV file of robot states.
 
@@ -134,9 +134,14 @@ class GripperDatasetReference(Dataset):
         """
 
         X = self.states_tensor.numpy()  # shape (num_samples, num_features)
+
+        # Apply weights to dimensions if provided
+        if clustering_dim_weights is not None:
+            weights = np.array(clustering_dim_weights)
+            X = X * weights[np.newaxis, :]
         
         # Normalize each column if desired
-        if normalize:
+        elif normalize:
             X_min, X_max = X.min(axis=0), X.max(axis=0)
             X = (X - X_min) / (X_max - X_min + 1e-8)
 
@@ -160,7 +165,7 @@ class GripperDatasetReference(Dataset):
         print(f"Selected {len(ref_indices)} reference indices.")
         return ref_indices, centers
     
-    def select_references_from_grid(self, grid_dimensions):
+    def select_references_from_grid(self, grid_dimensions, print=print):
         """
         Select references images and configurations states from a grid in configuration space
         for each grid cell, select the closest image to the center of the cell as reference
@@ -181,7 +186,7 @@ class GripperDatasetReference(Dataset):
         print(f"Selected {len(ref_indices)} reference indices from grid.")
         return ref_indices
 
-    def set_references(self, reference_indices = None, num_references=1, grid_dimensions=None):
+    def set_references(self, reference_indices = None, num_references=1, grid_dimensions=None, clustering_dim_weights=None, print=print):
         """
         Given a list of indices (in dataset order) corresponding to reference images,
         assign each sample the *nearest* reference by Euclidean distance in config space.
@@ -191,13 +196,15 @@ class GripperDatasetReference(Dataset):
             # select references close to the centers of the grid cells
             if grid_dimensions is not None:
                 self.num_references = np.prod(grid_dimensions)
-                ref_indices = self.select_references_from_grid(grid_dimensions)
+                ref_indices = self.select_references_from_grid(grid_dimensions, print=print)
                 print(f"Selected reference indeces from grid: {ref_indices.tolist()}")
             # select references with k-means clustering
             else:
                 self.num_references = num_references
-                ref_indices,_ = self.select_references_with_clustering(N=num_references)
-                print(f"Automatically selected reference indeces with K-means clustering: {ref_indices.tolist()}")
+                self.clustering_dim_weights = clustering_dim_weights
+                ref_indices,_ = self.select_references_with_clustering(N=num_references, clustering_dim_weights=clustering_dim_weights, print=print)
+                print(f"Automatically selected reference indeces with K-means clustering: {ref_indices.tolist()}"
+                      f"\nwith weights for clustering dimensions: {clustering_dim_weights}" if clustering_dim_weights is not None else "")
         # reference indices provided
         else:
             self.num_references = num_references

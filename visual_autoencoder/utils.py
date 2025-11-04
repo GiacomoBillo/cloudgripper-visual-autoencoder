@@ -62,16 +62,22 @@ def get_data(config, logger=None, load_reference=False, verbose=False):
     path = config["data"]["dataset_path"] # experiment path
     if load_reference:
         references = config["model"].get("references", 1)
+        clustering_dim_weights = config["model"].get("clustering_dim_weights", None)
         dataset = GripperDatasetReference(abs_path=path, 
                                  transform=preprocess,
                                  images_to_load=config["data"]["images_to_load"])
         
+        # select references with k-means clustering 
         if isinstance(references, int):
             num_references = references
-            dataset.set_references(num_references=num_references) # number of reference images
+            dataset.set_references(num_references=num_references, 
+                                   clustering_dim_weights=clustering_dim_weights,
+                                   print=logger.print) # number of reference images
+        # selecct references on a grid
         elif isinstance(references, list):
             grid_for_references = references
-            dataset.set_references(grid_dimensions=grid_for_references)
+            dataset.set_references(grid_dimensions=grid_for_references,
+                                   print=logger.print)
         else:
             raise ValueError("References must be int or list")
 
@@ -136,7 +142,12 @@ def create_model_name(config, verbose=False):
         ref = config["model"].get("references")
         if isinstance(ref, list):
             ref = f"{ref[0]}{ref[1]}{ref[2]}{ref[3]}{ref[4]}"
-        name += f"_ref{ref}"
+        elif isinstance(ref, int):
+            name += f"_ref{ref}"
+            weights = config["model"].get("clustering_dim_weights", None)
+            if weights is not None:
+                weights_str = "".join([str(w) for w in weights])
+                name += f"_w{weights_str}"
         if config["model"].get("delta", False):
             name += "_delta"
 
