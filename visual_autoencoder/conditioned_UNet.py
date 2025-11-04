@@ -13,7 +13,7 @@ import cv2
 from gripper_data import transpose_channels_first
 from torchvision.transforms import Resize
 import numpy as np
-
+from gripper_data import store_image
 
 
 """ 
@@ -281,9 +281,14 @@ class UNetWithFiLMAndEnv(UNetWithFiLM):
         self.image_shape = [x//config["data"]["resize_factor"] for x in config["data"]["top_img_shape"]] # [height, width]
 
         # load background/mean image
-        self.background_image = self.load_background_image()
+        self.background_path = os.path.join(self.model_path, "background.jpeg")
+        if os.path.exists(self.background_path):
+            self.background_image = self.load_background_image()
+        else:
+            self.background_image = None
 
-    def load_background_image(self):
+
+    def load_external_background_image(self):
         # Implement loading of background image
         background_image_path = os.getenv("BACKGROUND_IMAGE_PATH")
         if background_image_path is None:
@@ -291,14 +296,34 @@ class UNetWithFiLMAndEnv(UNetWithFiLM):
         if not os.path.exists(background_image_path):
             raise FileNotFoundError(f"Background image not found at {background_image_path}")
         
-        background_image = cv2.imread(background_image_path)
+        self.background_path = background_image_path
+        self.load_background_image()
+        
+    
+    def load_background_image(self):
+        background_image = cv2.imread(self.background_path)
         background_image = cv2.cvtColor(background_image, cv2.COLOR_BGR2RGB)  # convert BGR to RGB
         background_image = transpose_channels_first(background_image) # move RGB channels to the first dimension
         if background_image.dtype == np.uint8:
             background_image = background_image.astype(np.float32) / 255.0  # normalize to [0, 1]
         background_image = torch.tensor(background_image, device=self.accelerator.device).unsqueeze(0)  # [1, C, H, W]        
         background_image = Resize(self.image_shape)(background_image)  # downscale if needed
-        return background_image
+        self.background_image = background_image  # [1, C, H, W]
+    
+
+    def create_background_image(self, training_dataset, batch=200):
+        # compute 
+        self.logger.print("Computing background image from training dataset")
+        train_loader = torch.utils.data.DataLoader(training_dataset, batch_size=batch, shuffle=True)
+        images, *_ = next(iter(train_loader))  # get one batch
+        images = images.to(self.accelerator.device)
+
+        median_img = torch.median(images, dim=0).values.cpu()         
+        # save
+        store_image(median_img, self.background_path)
+        # load and preprocess
+        self.load_background_image()
+
 
     def forward(self, ref_img: torch.Tensor, config: torch.Tensor) -> torch.Tensor:
         """
@@ -306,6 +331,9 @@ class UNetWithFiLMAndEnv(UNetWithFiLM):
         config: [B, config_dim]
         returns: [B, out_channels, H, W]
         """
+        if self.background_image is None:
+            raise ValueError("Background image not set. Please create or load a background image before inference.")
+
         # concatenate background to ref_img along channels
         B, C, H, W = ref_img.shape
         background = self.background_image.expand(B, -1, -1, -1)  # expand to batch size

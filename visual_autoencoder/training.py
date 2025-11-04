@@ -11,21 +11,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPI
 from accelerate.utils import broadcast
 
 from gripper_data_ref import GripperDatasetReference
-
-
-ENCODERS = {
-    "ConvolutionalEncoder",
-}
-DECODERS = {
-    "ConvolutionalDecoder",
-    "FourierMlpDecoder",
-    "UNetWithFiLM",
-    "UNetWithFiLMAndEnv"
-}
-ARCHITECTURES_WITH_REFERENCE = {
-                                "UNetWithFiLM",
-                                "UNetWithFiLMAndEnv"
-                                 }
+from utils import ENCODERS, DECODERS, ARCHITECTURES_WITH_REFERENCE
 
 
 class Trainer:

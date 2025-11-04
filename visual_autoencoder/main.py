@@ -1,6 +1,7 @@
 import torch
 import yaml
-from training import Trainer, ARCHITECTURES_WITH_REFERENCE
+from training import Trainer
+from utils import ARCHITECTURES_WITH_REFERENCE
 import os
 from utils import get_data
 from accelerate import Accelerator # for multigpu
@@ -63,7 +64,6 @@ if __name__ == "__main__":
             config=config, 
             accelerator=accelerator,
         )
-        model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
 
     else:
         raise ValueError(f"Unknown model architecture: {model_architecture}")
@@ -72,6 +72,14 @@ if __name__ == "__main__":
     config["data"]["num_workers"] = int(os.getenv("NUM_WORKERS", 0)) # set num_workers from .env, default 0
     load_reference = type(model).__name__ in ARCHITECTURES_WITH_REFERENCE  # load reference data for certain architectures
     train_loader, val_loader, test_loader = get_data(config, logger=model.logger, load_reference=load_reference)
+
+
+    if isinstance(model, UNetWithFiLMAndEnv):
+        if model.background_image is None:
+            # compute and set background image
+            model.create_background_image(train_loader.dataset)
+            model.logger.print("\n")
+            model.summary(input_size=[(1, 3, *image_shape), (1, len(config["model"]["dimensions_to_learn"]))])
 
     # -- Train model --
     trainer = Trainer(model, config)

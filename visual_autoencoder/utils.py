@@ -6,7 +6,20 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from gripper_data import GripperDataset
 from gripper_data_ref import GripperDatasetReference
-from training import ARCHITECTURES_WITH_REFERENCE
+
+ENCODERS = {
+    "ConvolutionalEncoder",
+}
+DECODERS = {
+    "ConvolutionalDecoder",
+    "FourierMlpDecoder",
+    "UNetWithFiLM",
+    "UNetWithFiLMAndEnv"
+}
+ARCHITECTURES_WITH_REFERENCE = {
+                                "UNetWithFiLM",
+                                "UNetWithFiLMAndEnv"
+                                 }
 
 
 def subsample_dataset(dataset: Dataset, length=None, fraction=None):
