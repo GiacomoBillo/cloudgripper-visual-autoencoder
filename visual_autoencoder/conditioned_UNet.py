@@ -9,6 +9,10 @@ from accelerate import Accelerator
 import yaml
 from training import Trainer
 from utils import get_data
+import cv2
+from gripper_data import transpose_channels_first
+from torchvision.transforms import Resize
+import numpy as np
 
 
 
@@ -167,6 +171,8 @@ class UNetWithFiLM(AcceleratedArchitecture):
         self.base_channels = base_channels
         self.num_downs = num_downs
 
+        self.delta = config["data"].get("delta", False)  # whether to use relative positions
+
         # build encoder channel sizes
         enc_channels = [base_channels * (2 ** i) for i in range(num_downs + 1)]  # includes bottleneck
         # encoder blocks: first block is input conv (no pooling), then Down blocks
@@ -285,10 +291,6 @@ class UNetWithFiLMAndEnv(UNetWithFiLM):
         if not os.path.exists(background_image_path):
             raise FileNotFoundError(f"Background image not found at {background_image_path}")
         
-        import cv2
-        from gripper_data import transpose_channels_first
-        from torchvision.transforms import Resize
-        import numpy as np
         background_image = cv2.imread(background_image_path)
         background_image = cv2.cvtColor(background_image, cv2.COLOR_BGR2RGB)  # convert BGR to RGB
         background_image = transpose_channels_first(background_image) # move RGB channels to the first dimension

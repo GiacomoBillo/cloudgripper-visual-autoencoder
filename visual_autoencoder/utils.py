@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from gripper_data import GripperDataset
 from gripper_data_ref import GripperDatasetReference
+from training import ARCHITECTURES_WITH_REFERENCE
 
 
 def subsample_dataset(dataset: Dataset, length=None, fraction=None):
@@ -116,6 +117,14 @@ def create_model_name(config, verbose=False):
     name = config["model"]["name"] # basename
     if name is None:
         name = ""
+
+    if config["model"]["architecture"] in ARCHITECTURES_WITH_REFERENCE:
+        ref = config["model"].get("references")
+        if isinstance(ref, list):
+            ref = f"{ref[0]}{ref[1]}{ref[2]}{ref[3]}{ref[4]}"
+        name += f"_ref{ref}"
+        if config["model"].get("delta", False):
+            name += "_delta"
 
     if config["data"]["train_fraction_used"] is not None:
         name += f"_train{config['data']['train_fraction_used']}"
