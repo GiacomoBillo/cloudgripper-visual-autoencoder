@@ -88,24 +88,25 @@ def get_data(config, logger=None, load_reference=False, verbose=False):
 
     # DataLoaders
     num_workers = config["data"].get("num_workers", 0)
+    persistent_workers = config["data"].get("persistent_workers", False)
     train_loader = DataLoader(train_dataset_used, 
                             batch_size=batch_size, 
                             shuffle=True,
                             num_workers=num_workers,
                             pin_memory=torch.cuda.is_available(),
-                            persistent_workers=True,
+                            persistent_workers=persistent_workers,
                             )
     val_loader = DataLoader(val_dataset_used,
                             batch_size=batch_size,
                             num_workers=num_workers,
                             pin_memory=torch.cuda.is_available(),
-                            persistent_workers=True,
+                            persistent_workers=persistent_workers,
                             )
     test_loader = DataLoader(test_dataset,
                             batch_size=batch_size,
                             num_workers=num_workers,
                             pin_memory=torch.cuda.is_available(),
-                            persistent_workers=True,
+                            persistent_workers=persistent_workers,
                             )
 
     if logger:

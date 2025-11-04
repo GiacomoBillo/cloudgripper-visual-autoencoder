@@ -17,6 +17,7 @@ load_dotenv()  # from .env file
 
 
 if __name__ == "__main__":
+
     # load configurations from config.yaml
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
     with open(config_file) as file:
@@ -70,6 +71,7 @@ if __name__ == "__main__":
 
     # -- Dataset and loaders --
     config["data"]["num_workers"] = int(os.getenv("NUM_WORKERS", 0)) # set num_workers from .env, default 0
+    config["data"]["persistent_workers"] = os.getenv("PERSISTENT_WORKERS") == "True" # set persistent_workers from .env, default False
     load_reference = type(model).__name__ in ARCHITECTURES_WITH_REFERENCE  # load reference data for certain architectures
     train_loader, val_loader, test_loader = get_data(config, logger=model.logger, load_reference=load_reference)
 
