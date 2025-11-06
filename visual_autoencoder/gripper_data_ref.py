@@ -208,7 +208,7 @@ class GripperDatasetReference(Dataset):
         # reference indices provided
         else:
             self.num_references = num_references
-            ref_indices = np.array(reference_indices, dtype=torch.long)
+            ref_indices = np.array(reference_indices, dtype=np.int64)
         self.ref_indices = ref_indices
         self.ref_states = self.states_tensor[ref_indices]
         ref_indices = torch.tensor(ref_indices, dtype=torch.long)

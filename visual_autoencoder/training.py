@@ -8,6 +8,7 @@ import numpy as np
 from architecture import AcceleratedArchitecture
 import time
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as LPIPSLoss
+from torchmetrics.image import PeakSignalNoiseRatio as PSNRLoss, StructuralSimilarityIndexMeasure as SSIMLoss
 from accelerate.utils import broadcast
 
 from gripper_data_ref import GripperDatasetReference
@@ -59,21 +60,8 @@ class Trainer:
             raise ValueError(f"Unknown loss function type: {self.loss_type}, for model type: {self.model_type}")
 
         # loss functions for evaluation
-        lpips_loss_fn_base = LPIPSLoss(net_type="vgg", normalize=True)
-        def lpips_loss_fn(output, images):
-            return lpips_loss_fn_base(output.clamp(0,1), images)
-        if self.model.__class__.__name__ in DECODERS:
-            self.eval_loss_functions = {
-                "MSE": torch.nn.MSELoss(),
-                "LPIPS": lpips_loss_fn
-            }
-        elif self.model.__class__.__name__ in ENCODERS:
-            self.eval_loss_functions = {
-                "MSE": torch.nn.MSELoss()
-            }
-        else:
-            raise ValueError(f"Unknown model architecture: {self.model.__class__.__name__}")
-
+        self.eval_loss_functions = self.set_eval_metrics()
+        
 
     def _inference_step(self, batch, verbose=False):
         # decoder with reference
@@ -405,6 +393,25 @@ class Trainer:
             json.dump(losses, file)
 
 
+    def set_eval_metrics(self):
+        if self.model.__class__.__name__ in ENCODERS:
+            eval_metrics = {
+                "MSE": torch.nn.MSELoss()
+            }
+
+        elif self.model.__class__.__name__ in DECODERS:
+            eval_metrics = {
+                "MSE": torch.nn.MSELoss(),
+                "LPIPS": LPIPSLoss(net_type="vgg", normalize=True),
+                "SSIM": SSIMLoss(data_range=1.0),
+                "PSNR": PSNRLoss(data_range=1.0)
+            }
+        else:
+            raise ValueError(f"Unknown model architecture: {self.model.__class__.__name__}")
+        
+        return eval_metrics
+
+
     def evaluation_step(self, batch, verbose=False):
         losses = {}
 
@@ -418,7 +425,7 @@ class Trainer:
 
                 outputs = self.model(reference_images, labels[:,self.dimensions_to_learn])
                 for key, loss_fn in self.eval_loss_functions.items():
-                    loss = loss_fn(outputs, images)
+                    loss = loss_fn(outputs.clamp(0, 1), images) # clamp reconstruction
                     losses[key] = loss.item()
 
             else:
