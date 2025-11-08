@@ -171,7 +171,8 @@ class UNetWithFiLM(AcceleratedArchitecture):
         self.base_channels = base_channels
         self.num_downs = num_downs
 
-        self.delta = config["data"].get("delta", False)  # whether to use relative positions
+        if config is not None:
+            self.delta = config["data"].get("delta", False)  # whether to use relative positions
 
         # build encoder channel sizes
         enc_channels = [base_channels * (2 ** i) for i in range(num_downs + 1)]  # includes bottleneck

@@ -425,7 +425,7 @@ class Trainer:
 
                 outputs = self.model(reference_images, labels[:,self.dimensions_to_learn])
                 for key, loss_fn in self.eval_loss_functions.items():
-                    loss = loss_fn(outputs.clamp(0, 1), images) # clamp reconstruction
+                    loss = loss_fn(outputs.clamp(0, 1), images.clamp(0,1)) # clamp reconstruction
                     losses[key] = loss.item()
 
             else:
