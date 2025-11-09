@@ -32,7 +32,8 @@ class GripperDataset(Dataset):
                  sessions=None,
                  transform=None,
                  images_to_load=["Bottom_images","Images"],
-                 verbose=False
+                 verbose=False,
+                get_item_and_index=False
                  ):
         # get dataset from absolute path or default path and experiment name
         if abs_path is not None:
@@ -59,6 +60,8 @@ class GripperDataset(Dataset):
         # load all recording sessions
         if sessions is None:
             sessions = os.listdir(data_path)
+
+        self.get_item_and_index = get_item_and_index
 
         # load each sessions
         for session in sessions:
@@ -134,6 +137,19 @@ class GripperDataset(Dataset):
         
         Returns
             bottom_image, top_image, state as Tensor """
+        if isinstance(index, list):
+            images_list = []
+            states_list = []
+            for idx in index:
+                imgs, state = self.__getitem__(idx)
+                images_list.append(imgs)
+                states_list.append(state)
+            images_batch = torch.stack(images_list)
+            states_batch = torch.stack(states_list)
+            if self.get_item_and_index:
+                return (index, images_batch, states_batch)
+            return images_batch, states_batch
+
         images = {}
         for image_type in self.images_to_load:
             image_path = self.images[image_type][index]
@@ -155,6 +171,9 @@ class GripperDataset(Dataset):
 
         # return bottom_img, top_img, state_values
         ordered_list_of_images = [images[image_type] for image_type in self.images_to_load]
+        
+        if self.get_item_and_index:
+            return (index, *ordered_list_of_images, state_values)
         return (*ordered_list_of_images, state_values)
     
 
