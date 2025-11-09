@@ -12,7 +12,7 @@ from torchmetrics.image import PeakSignalNoiseRatio as PSNRLoss, StructuralSimil
 from accelerate.utils import broadcast
 
 from gripper_data_ref import GripperDatasetReference
-from utils import ENCODERS, DECODERS, ARCHITECTURES_WITH_REFERENCE
+from utils import ENCODERS, DECODERS, ARCHITECTURES_WITH_REFERENCE, DIMENSIONS
 
 
 class Trainer:
@@ -395,8 +395,14 @@ class Trainer:
 
     def set_eval_metrics(self):
         if self.model.__class__.__name__ in ENCODERS:
+            def MSE_per_dimension(outputs, targets):
+                mse = torch.nn.MSELoss(reduction='none')(outputs, targets)
+                mse_per_dim = torch.mean(mse, dim=0)  # mean over batch
+                return mse_per_dim
+            
             eval_metrics = {
-                "MSE": torch.nn.MSELoss()
+                "MSE": torch.nn.MSELoss(),
+                "MSE per dimension": MSE_per_dimension,
             }
 
         elif self.model.__class__.__name__ in DECODERS:
@@ -436,7 +442,13 @@ class Trainer:
                     outputs = self.model(images)
                     for key, loss_fn in self.eval_loss_functions.items():
                         loss = loss_fn(outputs, labels[:,self.dimensions_to_learn])
-                        losses[key] = loss.item()
+
+                        if key == "MSE per dimension":
+                            # log each dimension separately
+                            for dim_idx, dim_loss in enumerate(loss):
+                                losses[f"MSE_dim_{DIMENSIONS[dim_idx]}"] = dim_loss.item()
+                        else:
+                            losses[key] = loss.item()
 
                 elif "decoder" in self.model_type:
                     outputs = self.model(labels[:,self.dimensions_to_learn])
@@ -446,11 +458,16 @@ class Trainer:
 
                 else:
                     raise ValueError(f"Unknown model type: {self.model_type}")
-                
-        losses["RMSE"] = np.sqrt(losses["MSE"])  # add RMSE
-        if verbose:
-            for key, loss in losses.items():
+
+        mse_keys = []
+        for key, loss in  losses.items():
+            if "MSE" in key:
+                mse_keys.append(key)
+            if verbose:
                 print(f"{key} loss: {loss:.4f}")
+        # add RMSE for each MSE
+        for key in mse_keys:
+            losses["R"+key] = np.sqrt(losses[key])
 
         return outputs, losses
 
@@ -460,19 +477,23 @@ class Trainer:
 
         running_losses = {}
         for key in self.eval_loss_functions.keys():
-            running_losses[key] = 0.0
             self.eval_loss_functions[key] = self.accelerator.prepare(self.eval_loss_functions[key])
 
         for batch in tqdm(test_loader, desc="Testing", total=len(test_loader), leave=False):
             outputs, losses = self.evaluation_step(batch, verbose=False)
-            for key, loss in running_losses.items():
+            for key, loss in losses.items():
+                if key not in running_losses:
+                    running_losses[key] = 0.0
                 running_losses[key] += losses[key]
 
         # average losses
         losses = {}
-        for key in self.eval_loss_functions.keys():
+        for key in running_losses.keys():
             losses[key] = running_losses[key] / len(test_loader)
-        losses["RMSE"] = np.sqrt(losses["MSE"]) # add RMSE
+        # add RMSE for each MSE
+        for key in losses.keys():
+            if "MSE" in key and "RMSE" not in key:
+                losses["R"+key] = np.sqrt(losses[key])
 
         if verbose:
             for key, loss in losses.items():

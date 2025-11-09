@@ -21,6 +21,7 @@ ARCHITECTURES_WITH_REFERENCE = {
                                 "UNetWithFiLMAndEnv"
                                  }
 
+DIMENSIONS = ["x", "y", "z", "r", "g"]
 
 def subsample_dataset(dataset: Dataset, length=None, fraction=None):
     if length is not None:
