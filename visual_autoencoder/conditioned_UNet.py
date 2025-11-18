@@ -172,6 +172,8 @@ class UNetWithFiLM(AcceleratedArchitecture):
         self.num_downs = num_downs
 
         if config is not None:
+            base_channels = config["model"].get("base_channels", base_channels)
+            self.base_channels = base_channels
             self.delta = config["data"].get("delta", False)  # whether to use relative positions
 
         # build encoder channel sizes

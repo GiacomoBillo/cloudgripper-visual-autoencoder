@@ -167,6 +167,8 @@ def create_model_name(config, verbose=False):
     dim_map = {0: "x", 1: "y", 2: "z", 3: "r", 4: "g"}
     for dim in config["model"]["dimensions_to_learn"]:
         name += f"{dim_map[dim]}"
+    if config["model"].get("base_channels") is not None:
+        name += f"_base{config['model']['base_channels']}"
 
     # replace dots
     name = name.replace(".", "_")
