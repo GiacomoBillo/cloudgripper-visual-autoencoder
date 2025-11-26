@@ -90,3 +90,7 @@ if __name__ == "__main__":
                         early_stopping_enabled=config["training"]["early_stopping"],
                         epochs=config["training"]["epochs"]
                         )
+
+    # -- Evaluate model --
+    metrics = trainer.evaluate_model(test_loader, log=True)
+

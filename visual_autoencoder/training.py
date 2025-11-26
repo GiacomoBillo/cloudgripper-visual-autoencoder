@@ -471,7 +471,7 @@ class Trainer:
 
         return outputs, losses
 
-    def evaluate_model(self, test_loader: DataLoader, verbose=True):  
+    def evaluate_model(self, test_loader: DataLoader, verbose=True, log=False):  
         self.model.eval()      
         test_loader, self.model, self.optimizer = self.accelerator.prepare(test_loader, self.model, self.optimizer)
 
@@ -494,8 +494,11 @@ class Trainer:
         for key in losses.keys():
             if "MSE" in key and "RMSE" not in key:
                 losses["R"+key] = np.sqrt(losses[key])
-
-        if verbose:
+        
+        if log:
+            for key, loss in losses.items():
+                self.logger.print(f"{key} loss: {loss:.4f}")
+        elif verbose:
             for key, loss in losses.items():
                 print(f"{key} loss: {loss:.4f}")
         
