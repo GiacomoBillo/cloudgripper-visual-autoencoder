@@ -236,42 +236,118 @@ Convolutional Encoder architecture
 3/4 double convolutional layers with max pooling
 and final fully conntected layer to 5D latent space
 """
+# class ConvolutionalEncoder(AcceleratedArchitecture):
+#     def __init__(self, 
+#                  model_name=None,
+#                  config=None,
+#                  load_model=False,
+#                  accelerator: Accelerator=None,
+#                 ):
+#         super().__init__(model_name, config, accelerator)
+
+#         self.output_dim = len(self.config["model"]["dimensions_to_learn"])
+#         # architecture
+#         # self.encoder = torch.nn.Sequential( # input [3, 45, 80]
+#         #     EncoderBlock(in_channels=in_channels, out_channels=8),   # [8, 22, 40]
+#         #     EncoderBlock(in_channels=8, out_channels=16),            # [16, 11, 20]
+#         #     EncoderBlock(in_channels=16, out_channels=32),           # [32, 5, 10]
+#         #     EncoderBlock(in_channels=32, out_channels=64, pooling=False),           # [64, 5, 10] no pooling
+
+#         #     torch.nn.Flatten(),
+            
+#         #     # fully connected layer to 5D latent space
+#         #     torch.nn.Linear(in_features=64*5*10, out_features=2), # flatten and reduce dimension
+#         #     torch.nn.Sigmoid() # to keep outputs between 0 and 1
+#         # )
+#         self.encoder = torch.nn.Sequential( # input [3, 45, 80]
+#             EncoderBlock(in_channels=self.channels, out_channels=4),   # [4, 22, 40]
+#             EncoderBlock(in_channels=4, out_channels=8),            # [8, 11, 20]
+#             EncoderBlock(in_channels=8, out_channels=16),           # [16, 5, 10]
+#             EncoderBlock(in_channels=16, out_channels=32, pooling=False),           # [32, 5, 10] no pooling
+
+#             torch.nn.Flatten(),
+            
+#             # fully connected layer to 5D latent space
+#             torch.nn.Linear(in_features=32*5*10, out_features=self.output_dim), # flatten and reduce dimension
+#             torch.nn.Sigmoid() # to keep outputs between 0 and 1
+#         )
+#         # print(self.encoder)
+
+#         if load_model:
+#             self.load_model()
+
+#     def forward(self, x):
+#         return self.encoder(x)
+    
+
 class ConvolutionalEncoder(AcceleratedArchitecture):
     def __init__(self, 
                  model_name=None,
                  config=None,
                  load_model=False,
                  accelerator: Accelerator=None,
+                 in_channels: int = 3,
+                 output_dim: int = 5,
+                 base_channels: int = 4,
+                 num_blocks: int = 4,
                 ):
         super().__init__(model_name, config, accelerator)
 
-        self.output_dim = len(self.config["model"]["dimensions_to_learn"])
-        # architecture
-        # self.encoder = torch.nn.Sequential( # input [3, 45, 80]
-        #     EncoderBlock(in_channels=in_channels, out_channels=8),   # [8, 22, 40]
-        #     EncoderBlock(in_channels=8, out_channels=16),            # [16, 11, 20]
-        #     EncoderBlock(in_channels=16, out_channels=32),           # [32, 5, 10]
-        #     EncoderBlock(in_channels=32, out_channels=64, pooling=False),           # [64, 5, 10] no pooling
+        # defaults when no config is provided
+        if self.config is None:
+            self.in_channels = in_channels
+            self.output_dim = output_dim
+            self.base_channels = base_channels
+            self.num_blocks = num_blocks
+        else:
+            self.in_channels = in_channels
+            # prefer config values when available
+            self.output_dim = len(self.config["model"]["dimensions_to_learn"]) if self.config and "model" in self.config else output_dim
+            self.base_channels = self.config["model"].get("base_channels", base_channels)
+            self.num_blocks = self.config["model"].get("num_downs", num_blocks)
 
-        #     torch.nn.Flatten(),
-            
-        #     # fully connected layer to 5D latent space
-        #     torch.nn.Linear(in_features=64*5*10, out_features=2), # flatten and reduce dimension
-        #     torch.nn.Sigmoid() # to keep outputs between 0 and 1
-        # )
-        self.encoder = torch.nn.Sequential( # input [3, 45, 80]
-            EncoderBlock(in_channels=self.channels, out_channels=4),   # [4, 22, 40]
-            EncoderBlock(in_channels=4, out_channels=8),            # [8, 11, 20]
-            EncoderBlock(in_channels=8, out_channels=16),           # [16, 5, 10]
-            EncoderBlock(in_channels=16, out_channels=32, pooling=False),           # [32, 5, 10] no pooling
+        # input size
+        if self.config and "data" in self.config and "top_img_shape" in self.config["data"]:
+            h0 = self.config["data"]["top_img_shape"][0] 
+            w0 = self.config["data"]["top_img_shape"][1] 
 
-            torch.nn.Flatten(),
-            
-            # fully connected layer to 5D latent space
-            torch.nn.Linear(in_features=32*5*10, out_features=self.output_dim), # flatten and reduce dimension
-            torch.nn.Sigmoid() # to keep outputs between 0 and 1
-        )
-        # print(self.encoder)
+            # resize/downscale
+            if "resize_factor" in self.config["data"]:
+                h0 = h0 // self.config["data"]["resize_factor"]
+                w0 = w0 // self.config["data"]["resize_factor"]
+        else:
+            # default input size after /16 downscale
+            h0, w0 = 45, 80
+
+        # -- Architecture --
+        # build encoder blocks 
+        layers = []
+        in_channels = self.in_channels
+        out_channels = self.base_channels
+        # encoder blocks with pooling exccept for the last
+        for i in range(self.num_blocks):
+            # all layers except last, pooling
+            if i < self.num_blocks - 1:
+                out_channels = self.base_channels * (2 ** i)
+                layers.append(EncoderBlock(in_channels=in_channels, out_channels=out_channels, pooling=True))
+            # last layer without pooling
+            else:
+                layers.append(EncoderBlock(in_channels=in_channels, out_channels=out_channels, pooling=False))
+            in_channels = out_channels
+            # after each pooling spatial dims halve
+
+        # compute flattened feature map spatial size after pooling
+        h_final = max(1, h0 // (2 ** (self.num_blocks-1)))
+        w_final = max(1, w0 // (2 ** (self.num_blocks-1)))
+
+        # full connection to latent space
+        layers.append(torch.nn.Flatten())
+        in_features = out_channels * h_final * w_final
+        layers.append(torch.nn.Linear(in_features=in_features, out_features=self.output_dim))
+        layers.append(torch.nn.Sigmoid())
+
+        # assemble sequential encoder
+        self.encoder = torch.nn.Sequential(*layers)
 
         if load_model:
             self.load_model()
