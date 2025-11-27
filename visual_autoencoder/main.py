@@ -8,7 +8,7 @@ from accelerate import Accelerator # for multigpu
 from dotenv import load_dotenv
 
 # import architectures
-from architecture import ConvolutionalEncoder, ConvolutionalDecoder, FourierMlpDecoder
+from architecture import ConvolutionalEncoder, ResNetEncoder, ConvolutionalDecoder, FourierMlpDecoder
 from conditioned_UNet import UNetWithFiLM, UNetWithFiLMAndEnv
 
 
@@ -39,6 +39,15 @@ if __name__ == "__main__":
         model = ConvolutionalEncoder(
             config=config,
             accelerator=accelerator,
+        )
+        model.summary(input_size=(1, 3, *image_shape))
+
+    elif model_architecture == "ResNetEncoder":
+        # create encoder
+        model = ResNetEncoder(
+            config=config,
+            accelerator=accelerator,
+            pretrained_resnet=True,
         )
         model.summary(input_size=(1, 3, *image_shape))
         

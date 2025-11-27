@@ -9,6 +9,7 @@ import re
 from utils import create_model_name
 from dotenv import load_dotenv
 from utils import Logger
+from torchvision.models import resnet18
 
 load_dotenv()  # from .env file
 VERBOSE = os.getenv("VERBOSE", "False").lower() == "true"
@@ -235,51 +236,7 @@ downscale /8 to [3, 90, 160]
 Convolutional Encoder architecture
 3/4 double convolutional layers with max pooling
 and final fully conntected layer to 5D latent space
-"""
-# class ConvolutionalEncoder(AcceleratedArchitecture):
-#     def __init__(self, 
-#                  model_name=None,
-#                  config=None,
-#                  load_model=False,
-#                  accelerator: Accelerator=None,
-#                 ):
-#         super().__init__(model_name, config, accelerator)
-
-#         self.output_dim = len(self.config["model"]["dimensions_to_learn"])
-#         # architecture
-#         # self.encoder = torch.nn.Sequential( # input [3, 45, 80]
-#         #     EncoderBlock(in_channels=in_channels, out_channels=8),   # [8, 22, 40]
-#         #     EncoderBlock(in_channels=8, out_channels=16),            # [16, 11, 20]
-#         #     EncoderBlock(in_channels=16, out_channels=32),           # [32, 5, 10]
-#         #     EncoderBlock(in_channels=32, out_channels=64, pooling=False),           # [64, 5, 10] no pooling
-
-#         #     torch.nn.Flatten(),
-            
-#         #     # fully connected layer to 5D latent space
-#         #     torch.nn.Linear(in_features=64*5*10, out_features=2), # flatten and reduce dimension
-#         #     torch.nn.Sigmoid() # to keep outputs between 0 and 1
-#         # )
-#         self.encoder = torch.nn.Sequential( # input [3, 45, 80]
-#             EncoderBlock(in_channels=self.channels, out_channels=4),   # [4, 22, 40]
-#             EncoderBlock(in_channels=4, out_channels=8),            # [8, 11, 20]
-#             EncoderBlock(in_channels=8, out_channels=16),           # [16, 5, 10]
-#             EncoderBlock(in_channels=16, out_channels=32, pooling=False),           # [32, 5, 10] no pooling
-
-#             torch.nn.Flatten(),
-            
-#             # fully connected layer to 5D latent space
-#             torch.nn.Linear(in_features=32*5*10, out_features=self.output_dim), # flatten and reduce dimension
-#             torch.nn.Sigmoid() # to keep outputs between 0 and 1
-#         )
-#         # print(self.encoder)
-
-#         if load_model:
-#             self.load_model()
-
-#     def forward(self, x):
-#         return self.encoder(x)
-    
-
+""" 
 class ConvolutionalEncoder(AcceleratedArchitecture):
     def __init__(self, 
                  model_name=None,
@@ -299,12 +256,14 @@ class ConvolutionalEncoder(AcceleratedArchitecture):
             self.output_dim = output_dim
             self.base_channels = base_channels
             self.num_blocks = num_blocks
+            self.dropout = None
         else:
             self.in_channels = in_channels
             # prefer config values when available
             self.output_dim = len(self.config["model"]["dimensions_to_learn"]) if self.config and "model" in self.config else output_dim
             self.base_channels = self.config["model"].get("base_channels", base_channels)
-            self.num_blocks = self.config["model"].get("num_downs", num_blocks)
+            self.num_blocks = self.config["model"].get("num_blocks", num_blocks)
+            self.dropout = self.config["model"].get("dropout", None)
 
         # input size
         if self.config and "data" in self.config and "top_img_shape" in self.config["data"]:
@@ -342,11 +301,53 @@ class ConvolutionalEncoder(AcceleratedArchitecture):
 
         # full connection to latent space
         layers.append(torch.nn.Flatten())
+        if self.dropout is not None:
+            layers.append(torch.nn.Dropout(self.dropout))
         in_features = out_channels * h_final * w_final
         layers.append(torch.nn.Linear(in_features=in_features, out_features=self.output_dim))
         layers.append(torch.nn.Sigmoid())
 
         # assemble sequential encoder
+        self.encoder = torch.nn.Sequential(*layers)
+
+        if load_model:
+            self.load_model()
+
+    def forward(self, x):
+        return self.encoder(x)
+    
+
+class ResNetEncoder(AcceleratedArchitecture):
+    def __init__(self, 
+                 model_name=None,
+                 config=None,
+                 load_model=False,
+                 accelerator: Accelerator=None,
+                 pretrained_resnet=True,
+                ):
+        super().__init__(model_name, config, accelerator)
+
+        if self.config is None:
+            self.output_dim = 5
+            self.dropout = None
+        else:
+            self.output_dim = len(self.config["model"]["dimensions_to_learn"])
+            self.dropout = self.config["model"].get("dropout", None)
+
+        # TODO: check input dimensions
+
+        # architecture
+        layers = []
+        # use ResNet18 as backbone
+        base = resnet18(pretrained=pretrained_resnet)
+        # Remove last FC layer → output becomes (batch, 512)
+        resnet = nn.Sequential(*list(base.children())[:-1])
+        layers.append(resnet)
+        layers.append(torch.nn.Flatten())
+        if self.dropout is not None:
+            layers.append(torch.nn.Dropout(self.dropout))
+        layers.append(torch.nn.Linear(in_features=512, out_features=self.output_dim))
+        layers.append(torch.nn.Sigmoid()) # to keep outputs between 0 and 1
         self.encoder = torch.nn.Sequential(*layers)
 
         if load_model:

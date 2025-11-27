@@ -9,6 +9,7 @@ from gripper_data_ref import GripperDatasetReference
 
 ENCODERS = {
     "ConvolutionalEncoder",
+    "ResNetEncoder",
 }
 DECODERS = {
     "ConvolutionalDecoder",
@@ -152,6 +153,8 @@ def create_model_name(config, verbose=False):
         if config["model"].get("delta", False):
             name += "_delta"
 
+    if config["model"]["dropout"] is not None:
+        name += f"_dropout{config['model']['dropout']}"
     if config["data"]["train_fraction_used"] is not None:
         name += f"_train{config['data']['train_fraction_used']}"
     if config["data"]["val_fraction_used"] is not None:
